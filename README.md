@@ -62,7 +62,7 @@ source ~/.bashrc
 
 Initialize conda3
 ```
-conda create -y -n lerobot_alohamini python=3.10
+conda create -y -n lerobot_alohamini python=3.12
 conda activate lerobot_alohamini
 ```
 
