@@ -63,12 +63,20 @@ def main():
             "  alohamini2pro: am-arm-6dof,  sts3250/sts3095 (upgraded), lift sts3095, lead=131 mm/rev"
         ),
     )
+    parser.add_argument(
+        "--no_follower",
+        action="store_true",
+        help="Do not connect follower arms, only operate the base and lift. Use together with --no_leader on the teleoperate side.",
+    )
     args = parser.parse_args()
 
     logging.info("Configuring LeKiwi")
     robot_config = LeKiwiConfig()
     robot_config.id = "AlohaMiniRobot"
     robot_config.robot_model = args.robot_model
+    robot_config.no_follower = args.no_follower
+    if args.no_follower:
+        logging.info("no_follower mode: follower arms will not connect, only base and lift operate.")
     robot = LeKiwi(robot_config)
 
 

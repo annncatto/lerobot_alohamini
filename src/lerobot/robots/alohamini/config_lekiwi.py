@@ -62,6 +62,10 @@ class LeKiwiConfig(RobotConfig):
     # Set to `True` for backward compatibility with previous policies/dataset
     use_degrees: bool = False
 
+    # When True, skip follower arms entirely (only base and lift operate).
+    # Use together with --no_leader on the teleoperate side for base-only teleoperation.
+    no_follower: bool = False
+
 
 
 
