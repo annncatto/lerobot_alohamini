@@ -95,6 +95,12 @@ class LeKiwiClientConfig(RobotConfig):
     port_zmq_cmd: int = 5555
     port_zmq_observations: int = 5556
 
+    # Must match the robot_model used on the host side so that _state_ft keys are consistent.
+    # alohamini1   – so-arm-5dof (6 joints per arm, no wrist_yaw)
+    # alohamini2   – am-arm-6dof (7 joints per arm, includes wrist_yaw)
+    # alohamini2pro– am-arm-6dof (7 joints per arm, includes wrist_yaw)
+    robot_model: str = "alohamini1"
+
     teleop_keys: dict[str, str] = field(
         default_factory=lambda: {
             # Movement

@@ -81,29 +81,55 @@ class LeKiwiClient(Robot):
         self._is_connected = False
         self.logs = {}
 
-    @cached_property
-    def _state_ft(self) -> dict[str, type]:
-        return dict.fromkeys(
-            (
+        # Arm state keys depend on DOF, which is determined by robot_model.
+        _6DOF_MODELS = {"alohamini2", "alohamini2pro"}
+        if config.robot_model in _6DOF_MODELS:
+            self._left_arm_state_keys = (
                 "arm_left_shoulder_pan.pos",
                 "arm_left_shoulder_lift.pos",
                 "arm_left_elbow_flex.pos",
                 "arm_left_wrist_flex.pos",
-                #"left_wrist_yaw.pos",
+                "arm_left_wrist_yaw.pos",
                 "arm_left_wrist_roll.pos",
                 "arm_left_gripper.pos",
+            )
+            self._right_arm_state_keys = (
                 "arm_right_shoulder_pan.pos",
                 "arm_right_shoulder_lift.pos",
                 "arm_right_elbow_flex.pos",
                 "arm_right_wrist_flex.pos",
-                #"right_wrist_yaw.pos",
+                "arm_right_wrist_yaw.pos",
                 "arm_right_wrist_roll.pos",
                 "arm_right_gripper.pos",
+            )
+        else:  # alohamini1 / so-arm-5dof
+            self._left_arm_state_keys = (
+                "arm_left_shoulder_pan.pos",
+                "arm_left_shoulder_lift.pos",
+                "arm_left_elbow_flex.pos",
+                "arm_left_wrist_flex.pos",
+                "arm_left_wrist_roll.pos",
+                "arm_left_gripper.pos",
+            )
+            self._right_arm_state_keys = (
+                "arm_right_shoulder_pan.pos",
+                "arm_right_shoulder_lift.pos",
+                "arm_right_elbow_flex.pos",
+                "arm_right_wrist_flex.pos",
+                "arm_right_wrist_roll.pos",
+                "arm_right_gripper.pos",
+            )
+
+    @property
+    def _state_ft(self) -> dict[str, type]:
+        return dict.fromkeys(
+            (
+                *self._left_arm_state_keys,
+                *self._right_arm_state_keys,
                 "x.vel",
                 "y.vel",
                 "theta.vel",
-                "lift_axis.height_mm",   
-                #"lift_axis.vel",         
+                "lift_axis.height_mm",
             ),
             float,
         )
