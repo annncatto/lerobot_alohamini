@@ -5,7 +5,7 @@ Shared software layer for the AlohaMini product line, built on HuggingFace LeRob
 > Haven't assembled your hardware yet? Start here: [AlohaMini](https://github.com/liyiteng/alohamini) · [AM-ARM200](https://github.com/liyiteng/AM-ARM)
 
 ## Updates
-
+- **[2025-05-21]** Add support for AM-ARM200 and AlohaMini 2 / 2 Pro
 - **[2025-04-10]** Compatible with LeRobot 0.5.2
 
 ## Documentation
@@ -15,7 +15,7 @@ Shared software layer for the AlohaMini product line, built on HuggingFace LeRob
 | [Install](docs/alohamini/install.md) | Environment setup, serial port permissions, HuggingFace configuration |
 | [Hardware Profiles](docs/alohamini/profiles.md) | `--arm_profile` and `--robot_model` flag reference |
 | [AM-ARM200](docs/alohamini/am-arm200.md) | Calibration → teleoperation → dataset recording → training → evaluation (single arm, one PC) |
-| [AlohaMini](docs/alohamini/alohamini.md) | Calibration → teleoperation → dataset recording → training → evaluation (dual arm, Pi + PC) |
+| [AlohaMini 1 / 2 / 2 Pro](docs/alohamini/alohamini.md) | Calibration → teleoperation → dataset recording → training → evaluation (dual arm, Pi + PC) |
 
 ---
 
