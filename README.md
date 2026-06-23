@@ -14,6 +14,7 @@ Shared software layer for the AlohaMini product line, built on HuggingFace LeRob
 |-------|-------------|
 | [Install](docs/alohamini/install.md) | Environment setup, serial port permissions, HuggingFace configuration |
 | [Hardware Profiles](docs/alohamini/profiles.md) | `--arm_profile` and `--robot_model` flag reference |
+| [Command Cheat Sheet](docs/alohamini/commands.md) | Common setup, host, teleoperation, recording, training, evaluation, and debug commands |
 | [AM-ARM200](docs/alohamini/am-arm200.md) | Calibration → teleoperation → dataset recording → training → evaluation (single arm, one PC) |
 | [AlohaMini 1 / 2 / 2 Pro](docs/alohamini/alohamini.md) | Calibration → teleoperation → dataset recording → training → evaluation (dual arm, Pi + PC) |
 
