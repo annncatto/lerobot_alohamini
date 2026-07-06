@@ -179,6 +179,9 @@ class LeKiwi(Robot):
         self._overcurrent_count: dict[str, int] = {}
         self._overcurrent_trip_n = 20
         self._last_currents_log_t = 0.0
+        self._gripper_current_count: dict[str, int] = {}
+        self._gripper_protected: dict[str, dict[str, float]] = {}
+        self._last_gripper_current_log_t = 0.0
 
 
     @property
@@ -547,11 +550,86 @@ class LeKiwi(Robot):
             "theta.vel": theta,
         }  # m/s and deg/s
     
+    @staticmethod
     def _raw_to_ma(raw):
         try:
             return float(raw) * 6.5
         except Exception:
             return 0.0
+
+    def _check_and_filter_gripper_goal(
+        self,
+        bus: FeetechMotorsBus,
+        motor_name: str,
+        goal_pos: float,
+    ) -> float:
+        limit_ma = self.config.gripper_current_limit_ma
+        if limit_ma <= 0:
+            return goal_pos
+
+        try:
+            raw_current = bus.read("Present_Current", motor_name, normalize=False)
+            present_pos = float(bus.read("Present_Position", motor_name))
+        except Exception as exc:
+            logger.warning("Failed to read gripper current for %s: %s", motor_name, exc)
+            return goal_pos
+
+        current_ma = abs(self._raw_to_ma(raw_current))
+        protected = self._gripper_protected.get(motor_name)
+
+        if protected is not None:
+            latch_pos = protected["pos"]
+            blocked_dir = protected["direction"]
+            release_delta = self.config.gripper_protection_release_delta
+            if (goal_pos - latch_pos) * blocked_dir > release_delta:
+                return latch_pos
+            self._gripper_protected.pop(motor_name, None)
+            self._gripper_current_count[motor_name] = 0
+
+        if current_ma > limit_ma:
+            count = self._gripper_current_count.get(motor_name, 0) + 1
+            self._gripper_current_count[motor_name] = count
+            if count >= self.config.gripper_current_trip_n:
+                direction = float(np.sign(goal_pos - present_pos))
+                if direction == 0:
+                    direction = 1.0
+                self._gripper_protected[motor_name] = {
+                    "pos": present_pos,
+                    "direction": direction,
+                    "current_ma": current_ma,
+                }
+                now = time.monotonic()
+                if now - self._last_gripper_current_log_t >= 0.5:
+                    logger.warning(
+                        "Gripper current protection: %s %.1fmA > %.1fmA, holding at %.2f",
+                        motor_name,
+                        current_ma,
+                        limit_ma,
+                        present_pos,
+                    )
+                    self._last_gripper_current_log_t = now
+                return present_pos
+        else:
+            self._gripper_current_count[motor_name] = 0
+
+        return goal_pos
+
+    def _apply_gripper_current_protection(
+        self,
+        bus: FeetechMotorsBus,
+        goals: dict[str, float],
+    ) -> dict[str, float]:
+        protected_goals = dict(goals)
+        for action_key, goal_pos in goals.items():
+            motor_name = action_key.replace(".pos", "")
+            if not motor_name.endswith("_gripper"):
+                continue
+            protected_goals[action_key] = self._check_and_filter_gripper_goal(
+                bus,
+                motor_name,
+                float(goal_pos),
+            )
+        return protected_goals
         
     @check_if_not_connected
     def get_observation(self) -> RobotObservation:
@@ -647,6 +725,11 @@ class LeKiwi(Robot):
             present_right = self.right_bus.sync_read("Present_Position", self.right_arm_motors)
             gp_right = {k: (v, present_right[k.replace(".pos", "")]) for k, v in right_pos.items()}
             right_pos = ensure_safe_goal_position(gp_right, self.config.max_relative_target)
+
+        if left_pos:
+            left_pos = self._apply_gripper_current_protection(self.left_bus, left_pos)
+        if self.right_bus and right_pos:
+            right_pos = self._apply_gripper_current_protection(self.right_bus, right_pos)
 
 
         # Send goal position to the actuators

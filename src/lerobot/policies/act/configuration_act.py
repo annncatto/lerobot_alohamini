@@ -81,10 +81,12 @@ class ACTConfig(PreTrainedConfig):
     """
 
     # Input / output structure.
+    # 中文注释：ACT 目前只用当前帧观测，训练时一次学习预测 chunk_size 个未来动作。
     n_obs_steps: int = 1
     chunk_size: int = 100
     n_action_steps: int = 100
 
+    # 中文注释：这里决定各类输入输出如何用数据集 stats 做归一化；字段名必须能在 stats.json 中找到。
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
             "VISUAL": NormalizationMode.MEAN_STD,
@@ -95,10 +97,12 @@ class ACTConfig(PreTrainedConfig):
 
     # Architecture.
     # Vision backbone.
+    # 中文注释：图像会先经过 torchvision ResNet，再作为视觉 token 送入 Transformer。
     vision_backbone: str = "resnet18"
     pretrained_backbone_weights: str | None = "ResNet18_Weights.IMAGENET1K_V1"
     replace_final_stride_with_dilation: int = False
     # Transformer layers.
+    # 中文注释：下面这些是模型容量相关参数，显存不足时优先减小 dim_model、层数或 batch_size。
     pre_norm: bool = False
     dim_model: int = 512
     n_heads: int = 8
@@ -116,13 +120,16 @@ class ACTConfig(PreTrainedConfig):
 
     # Inference.
     # Note: the value used in ACT when temporal ensembling is enabled is 0.01.
+    # 中文注释：启用时间集成时推理每步都重新预测一段动作，只输出加权后的当前动作。
     temporal_ensemble_coeff: float | None = None
 
     # Training and loss computation.
+    # 中文注释：use_vae=True 时总损失为动作 L1 重建损失 + kl_weight * KL 损失。
     dropout: float = 0.1
     kl_weight: float = 10.0
 
     # Training preset
+    # 中文注释：训练脚本默认会使用这些 ACT 预设优化器参数，除非手动关闭 policy preset。
     optimizer_lr: float = 1e-5
     optimizer_weight_decay: float = 1e-4
     optimizer_lr_backbone: float = 1e-5
@@ -169,6 +176,7 @@ class ACTConfig(PreTrainedConfig):
 
     @property
     def action_delta_indices(self) -> list:
+        # 中文注释：训练数据会为 action 取 [当前帧, 当前帧+1, ...] 共 chunk_size 个未来动作。
         return list(range(self.chunk_size))
 
     @property

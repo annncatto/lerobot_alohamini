@@ -90,6 +90,7 @@ import logging
 import time
 from dataclasses import asdict, dataclass
 from pprint import pformat
+from typing import Callable
 
 from lerobot.cameras import CameraConfig  # noqa: F401
 from lerobot.cameras.opencv import OpenCVCameraConfig  # noqa: F401
@@ -237,6 +238,7 @@ def record_loop(
     single_task: str | None = None,
     display_data: bool = False,
     display_compressed_images: bool = False,
+    preview_callback: Callable[[RobotObservation], None] | None = None,
 ):
     if dataset is not None and dataset.fps != fps:
         raise ValueError(f"The dataset fps should be equal to requested fps ({dataset.fps} != {fps}).")
@@ -291,6 +293,11 @@ def record_loop(
 
         # Applies a pipeline to the raw robot observation, default is IdentityProcessor
         obs_processed = robot_observation_processor(obs)
+        if preview_callback is not None:
+            try:
+                preview_callback(obs_processed)
+            except Exception as exc:
+                logging.warning("Preview callback failed: %s", exc)
 
         if dataset is not None:
             observation_frame = build_dataset_frame(dataset.features, obs_processed, prefix=OBS_STR)

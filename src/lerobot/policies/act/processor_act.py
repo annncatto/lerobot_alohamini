@@ -59,6 +59,7 @@ def make_act_pre_post_processors(
         RenameObservationsProcessorStep(rename_map={}),
         AddBatchDimensionProcessorStep(),
         DeviceProcessorStep(device=config.device),
+        # 中文注释：ACT 训练/推理前统一归一化图像、状态和动作；stats 来自数据集 meta/stats.json。
         NormalizerProcessorStep(
             features={**config.input_features, **config.output_features},
             norm_map=config.normalization_mapping,
@@ -67,6 +68,7 @@ def make_act_pre_post_processors(
         ),
     ]
     output_steps = [
+        # 中文注释：模型输出的是归一化动作，执行/保存前要按数据集统计量反归一化回真实动作尺度。
         UnnormalizerProcessorStep(
             features=config.output_features, norm_map=config.normalization_mapping, stats=dataset_stats
         ),

@@ -112,6 +112,7 @@ class ACTPolicy(PreTrainedPolicy):
             action = self.temporal_ensembler.update(actions)
             return action
 
+        # 中文注释：普通推理模式会缓存一段预测动作，队列没用完前不会再次调用大模型。
         # Action queue logic for n_action_steps > 1. When the action_queue is depleted, populate it by
         # querying the policy.
         if len(self._action_queue) == 0:
@@ -143,6 +144,7 @@ class ACTPolicy(PreTrainedPolicy):
         actions_hat, (mu_hat, log_sigma_x2_hat) = self.model(batch)
 
         abs_err = F.l1_loss(batch[ACTION], actions_hat, reduction="none")
+        # 中文注释：靠近 episode 末尾时未来动作不够 chunk_size，padding 部分不参与 L1 损失。
         valid_mask = ~batch["action_is_pad"].unsqueeze(-1)
         num_valid = valid_mask.sum() * abs_err.shape[-1]
         l1_loss = (abs_err * valid_mask).sum() / num_valid.clamp_min(1)
@@ -299,6 +301,7 @@ class ACT(nn.Module):
         if self.config.use_vae:
             self.vae_encoder = ACTEncoder(config, is_vae_encoder=True)
             self.vae_encoder_cls_embed = nn.Embedding(1, config.dim_model)
+            # 中文注释：训练阶段 VAE encoder 同时看当前机器人状态和未来动作片段，学习潜变量分布。
             # Projection layer for joint-space configuration to hidden dimension.
             if self.config.robot_state_feature:
                 self.vae_encoder_robot_state_input_proj = nn.Linear(
@@ -339,6 +342,7 @@ class ACT(nn.Module):
 
         # Transformer encoder input projections. The tokens will be structured like
         # [latent, (robot_state), (env_state), (image_feature_map_pixels)].
+        # 中文注释：不同模态先投影到同一个 dim_model，再拼成一串 token 给 Transformer 编码。
         if self.config.robot_state_feature:
             self.encoder_robot_state_input_proj = nn.Linear(
                 self.config.robot_state_feature.shape[0], config.dim_model
@@ -461,6 +465,7 @@ class ACT(nn.Module):
         encoder_in_tokens = [self.encoder_latent_input_proj(latent_sample)]
         encoder_in_pos_embed = list(self.encoder_1d_feature_pos_embed.weight.unsqueeze(1))
         # Robot state token.
+        # 中文注释：alohamini 数据集里的 observation.state 是 18 维，本分支会把它作为机器人本体状态 token。
         if self.config.robot_state_feature:
             encoder_in_tokens.append(self.encoder_robot_state_input_proj(batch[OBS_STATE]))
         # Environment state token.
@@ -472,6 +477,7 @@ class ACT(nn.Module):
             # NOTE: If modifying this section, verify on MPS devices that
             # gradients remain stable (no explosions or NaNs).
             for img in batch[OBS_IMAGES]:
+                # 中文注释：每个相机画面独立过 ResNet，feature map 的每个空间位置都会变成一个视觉 token。
                 cam_features = self.backbone(img)["feature_map"]
                 cam_pos_embed = self.encoder_cam_feat_pos_embed(cam_features).to(dtype=cam_features.dtype)
                 cam_features = self.encoder_img_feat_input_proj(cam_features)
@@ -507,6 +513,7 @@ class ACT(nn.Module):
         # Move back to (B, S, C).
         decoder_out = decoder_out.transpose(0, 1)
 
+        # 中文注释：每个 decoder query 对应未来一个时间步，线性头输出该步的 action_dim 维动作。
         actions = self.action_head(decoder_out)
 
         return actions, (mu, log_sigma_x2)

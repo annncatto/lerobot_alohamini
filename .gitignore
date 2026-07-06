@@ -166,6 +166,11 @@ wandb/
 data/
 outputs/
 
+# AlohaMini local GUI runtime files
+alohamini_ops/*.log
+alohamini_ops/record_control.txt
+alohamini_ops/record_motion.json
+
 # Translations
 *.mo
 *.pot

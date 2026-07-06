@@ -21,6 +21,22 @@ from lerobot.utils.utils import log_say
 from lerobot.utils.visualization_utils import init_rerun
 
 
+def log_eval(text: str) -> None:
+    print(text, flush=True)
+    log_say(text, play_sounds=False)
+
+
+def str_to_bool(value: str | bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    value = value.lower()
+    if value in {"1", "true", "yes", "y", "on"}:
+        return True
+    if value in {"0", "false", "no", "n", "off"}:
+        return False
+    raise argparse.ArgumentTypeError(f"Expected boolean value, got {value!r}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Evaluate AlohaMini robot with a pretrained policy")
     parser.add_argument("--num_episodes", type=int, default=2)
@@ -34,6 +50,12 @@ def main():
     parser.add_argument("--robot_model", type=str, default="alohamini1",
                         choices=["alohamini1", "alohamini2", "alohamini2pro"],
                         help="Must match the robot_model on the Pi host side")
+    parser.add_argument(
+        "--push_to_hub",
+        type=str_to_bool,
+        default=False,
+        help="Upload the evaluation dataset to Hugging Face Hub after local finalize.",
+    )
     args = parser.parse_args()
 
     device = str(auto_select_torch_device())
@@ -109,15 +131,19 @@ def main():
     engine.start()
 
     init_rerun(session_name="alohamini_evaluate")
-    log_say("Starting evaluation")
+    log_eval("Starting evaluation")
 
     control_interval = 1.0 / args.fps
     recorded = 0
 
     while recorded < args.num_episodes:
-        log_say(f"Eval episode {recorded + 1} of {args.num_episodes}")
+        log_eval(f"Eval episode {recorded + 1} of {args.num_episodes}")
         engine.reset()
         start = time.perf_counter()
+        loop_count = 0
+        action_count = 0
+        slow_frames = 0
+        inference_time = 0.0
 
         while (time.perf_counter() - start) < args.episode_time:
             loop_start = time.perf_counter()
@@ -126,25 +152,47 @@ def main():
             obs_processed = robot_observation_processor(obs_raw)
             obs_frame = build_dataset_frame(dataset_features, obs_processed, prefix=OBS_STR)
 
+            infer_start = time.perf_counter()
             action_tensor = engine.get_action(obs_frame)
+            inference_time += time.perf_counter() - infer_start
             if action_tensor is not None:
                 action_dict = {k: action_tensor[i].item() for i, k in enumerate(ordered_action_keys)}
                 robot.send_action(robot_action_processor((action_dict, obs_raw)))
                 action_frame = build_dataset_frame(dataset_features, action_dict, prefix=ACTION)
                 dataset.add_frame({**obs_frame, **action_frame, "task": args.task_description})
+                action_count += 1
 
             dt = time.perf_counter() - loop_start
+            loop_count += 1
+            if dt > control_interval:
+                slow_frames += 1
             if (sleep_t := control_interval - dt) > 0:
                 precise_sleep(sleep_t)
 
         dataset.save_episode()
+        elapsed = time.perf_counter() - start
+        actual_hz = loop_count / elapsed if elapsed > 0 else 0.0
+        policy_hz = action_count / inference_time if inference_time > 0 else 0.0
+        log_eval(
+            "Eval speed: "
+            f"episode={recorded + 1}, "
+            f"actual_hz={actual_hz:.2f}, "
+            f"target_hz={float(args.fps):.2f}, "
+            f"policy_hz={policy_hz:.2f}, "
+            f"frames={loop_count}, "
+            f"actions={action_count}, "
+            f"slow_frames={slow_frames}"
+        )
         recorded += 1
 
-    log_say("Evaluation complete")
+    log_eval("Evaluation complete")
     engine.stop()
     robot.disconnect()
     dataset.finalize()
-    dataset.push_to_hub()
+    if args.push_to_hub:
+        dataset.push_to_hub()
+    else:
+        log_eval("Evaluation dataset finalized locally; push_to_hub is disabled")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,46 @@
+from qt_compat import QCheckBox, QGridLayout, QGroupBox, QPushButton, QVBoxLayout, QWidget
+
+
+class TeleopTab(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.global_keys = QCheckBox("启用全局键盘映射")
+        self.global_keys.setEnabled(False)
+        self.global_keys.setToolTip("默认禁用：当前 Wayland/pynput 全局键盘捕获不稳定。")
+        self.voice_control = QCheckBox("启用语音控制")
+        self.voice_control.setToolTip("默认关闭。支持停止、前后左右、旋转、升降，以及采集保存/废弃/继续。")
+        self.estop = QPushButton("急停")
+        self.estop.setObjectName("estop")
+        self.forward = QPushButton("W 前进")
+        self.back = QPushButton("S 后退")
+        self.left = QPushButton("Z 左移")
+        self.right = QPushButton("X 右移")
+        self.rot_left = QPushButton("A 左转")
+        self.rot_right = QPushButton("D 右转")
+        self.lift_up = QPushButton("U 升降上")
+        self.lift_down = QPushButton("J 升降下")
+        self.stop = QPushButton("停止")
+
+        grid = QGridLayout()
+        grid.addWidget(self.forward, 0, 1)
+        grid.addWidget(self.left, 1, 0)
+        grid.addWidget(self.stop, 1, 1)
+        grid.addWidget(self.right, 1, 2)
+        grid.addWidget(self.back, 2, 1)
+        grid.addWidget(self.rot_left, 3, 0)
+        grid.addWidget(self.rot_right, 3, 2)
+        grid.addWidget(self.lift_up, 4, 0)
+        grid.addWidget(self.lift_down, 4, 2)
+
+        box = QGroupBox("底盘 / 升降控制")
+        box_layout = QVBoxLayout(box)
+        box_layout.setContentsMargins(18, 24, 18, 18)
+        box_layout.setSpacing(12)
+        box_layout.addWidget(self.global_keys)
+        box_layout.addWidget(self.voice_control)
+        box_layout.addWidget(self.estop)
+        box_layout.addLayout(grid)
+        box_layout.addStretch(1)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(box)

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 from dataclasses import dataclass, field
 
 from lerobot.cameras.configs import CameraConfig, Cv2Rotation
@@ -20,24 +21,36 @@ from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 from ..config import RobotConfig
 
 
-def lekiwi_cameras_config() -> dict[str, CameraConfig]:
+def _camera_catalog() -> dict[str, CameraConfig]:
     return {
-        # "forward": OpenCVCameraConfig(
-        #     index_or_path="/dev/am_camera_forward", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION
-        # ),
-        # "backward": OpenCVCameraConfig(
-        #     index_or_path="/dev/am_camera_backward", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION
-        # ),
-        # "chest": OpenCVCameraConfig(
-        #     index_or_path="/dev/am_camera_chest", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION
-        # ),
-        # "wrist_left": OpenCVCameraConfig(
-        #     index_or_path="/dev/am_camera_wrist_left", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION
-        # ),
-        # "wrist_right": OpenCVCameraConfig(
-        #     index_or_path="/dev/am_camera_wrist_right", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION
-        # ),
+        "forward": OpenCVCameraConfig(
+            index_or_path="/dev/am_camera_forward", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION
+        ),
+        "backward": OpenCVCameraConfig(
+            index_or_path="/dev/am_camera_backward", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION
+        ),
+        "chest": OpenCVCameraConfig(
+            index_or_path="/dev/am_camera_chest", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION
+        ),
+        "wrist_left": OpenCVCameraConfig(
+            index_or_path="/dev/am_camera_wrist_left", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION
+        ),
+        "wrist_right": OpenCVCameraConfig(
+            index_or_path="/dev/am_camera_wrist_right", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION
+        ),
     }
+
+
+def lekiwi_cameras_config() -> dict[str, CameraConfig]:
+    catalog = _camera_catalog()
+    requested = os.getenv("ALOHAMINI_CAMERAS", "forward,wrist_right")
+    names = [name.strip() for name in requested.split(",") if name.strip()]
+    unknown = [name for name in names if name not in catalog]
+    if unknown:
+        raise ValueError(
+            f"Unknown ALOHAMINI_CAMERAS entries: {unknown}. Available cameras: {list(catalog)}"
+        )
+    return {name: catalog[name] for name in names}
 
 
 @RobotConfig.register_subclass("alohamini")
@@ -66,6 +79,12 @@ class LeKiwiConfig(RobotConfig):
     # When True, skip follower arms entirely (only base and lift operate).
     # Use together with --no_leader on the teleoperate side for base-only teleoperation.
     no_follower: bool = False
+
+    # Gripper soft current protection. Present_Current is converted with the
+    # Feetech STS factor used elsewhere in this repo: raw * 6.5 ~= mA.
+    gripper_current_limit_ma: float = 900.0
+    gripper_current_trip_n: int = 3
+    gripper_protection_release_delta: float = 2.0
 
 
 
@@ -125,4 +144,4 @@ class LeKiwiClientConfig(RobotConfig):
     cameras: dict[str, CameraConfig] = field(default_factory=lekiwi_cameras_config)
 
     polling_timeout_ms: int = 15
-    connect_timeout_s: int = 5
+    connect_timeout_s: int = 15

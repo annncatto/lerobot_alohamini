@@ -18,6 +18,10 @@ from lerobot.utils.visualization_utils import init_rerun
 
 from datetime import datetime
 import argparse
+import json
+import threading
+import time
+from pathlib import Path
 
 
 def parse_bool(value: str | bool) -> bool:
@@ -30,6 +34,43 @@ def parse_bool(value: str | bool) -> bool:
     if value == "false":
         return False
     raise argparse.ArgumentTypeError("Expected true or false.")
+
+
+class PreviewFrameWriter:
+    def __init__(self, preview_dir: str | None, fps: int = 8, quality: int = 70):
+        self.preview_dir = Path(preview_dir) if preview_dir else None
+        self.period_s = 1.0 / max(int(fps), 1)
+        self.quality = int(quality)
+        self._last_write_t = 0.0
+        self._cv2 = None
+        if self.preview_dir is not None:
+            self.preview_dir.mkdir(parents=True, exist_ok=True)
+
+    def __call__(self, observation: dict) -> None:
+        if self.preview_dir is None:
+            return
+        now = time.monotonic()
+        if now - self._last_write_t < self.period_s:
+            return
+        if self._cv2 is None:
+            import cv2
+
+            self._cv2 = cv2
+        for name, value in observation.items():
+            if not hasattr(value, "shape") or len(value.shape) != 3:
+                continue
+            ok, buffer = self._cv2.imencode(
+                ".jpg",
+                value,
+                [int(self._cv2.IMWRITE_JPEG_QUALITY), self.quality],
+            )
+            if not ok:
+                continue
+            target = self.preview_dir / f"{name}.jpg"
+            tmp = self.preview_dir / f".{name}.jpg.tmp"
+            tmp.write_bytes(buffer.tobytes())
+            tmp.replace(target)
+        self._last_write_t = now
 
 
 def main():
@@ -60,6 +101,18 @@ def main():
     )
     parser.add_argument("--resume", action="store_true", help="Resume recording on existing dataset")
     parser.add_argument(
+        "--control_file",
+        type=str,
+        default=None,
+        help="Optional file watched for GUI commands: finish, rerecord, stop.",
+    )
+    parser.add_argument(
+        "--motion_file",
+        type=str,
+        default=None,
+        help="Optional JSON file watched for GUI reset teleop keys.",
+    )
+    parser.add_argument(
         "--push_to_hub",
         type=parse_bool,
         nargs="?",
@@ -67,6 +120,8 @@ def main():
         default=True,
         help="Whether to upload the dataset to Hugging Face Hub after recording. Use '--push_to_hub false' to skip upload.",
     )
+    parser.add_argument("--preview_dir", type=str, default=None, help="Optional directory for GUI preview JPEGs.")
+    parser.add_argument("--preview_fps", type=int, default=8, help="GUI preview frame rate.")
 
     args = parser.parse_args()
 
@@ -94,6 +149,7 @@ def main():
     keyboard = KeyboardTeleop(keyboard_config)
 
     teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
+    preview_writer = PreviewFrameWriter(args.preview_dir, fps=args.preview_fps)
 
     # === Dataset setup ===
     action_features = hw_to_dataset_features(robot.action_features, ACTION)
@@ -126,6 +182,95 @@ def main():
     keyboard.connect()
 
     listener, events = init_keyboard_listener()
+    control_stop = threading.Event()
+    manual_finish_wait = threading.Event()
+    manual_rerecord_wait = threading.Event()
+    restart_requested = threading.Event()
+    gui_motion_enabled = threading.Event()
+    gui_motion_keys = {"w", "s", "z", "x", "a", "d", "u", "j", "r", "f", " "}
+
+    def watch_control_file():
+        if not args.control_file:
+            return
+        control_path = Path(args.control_file)
+        last_raw_command = ""
+        while not control_stop.is_set() and not events["stop_recording"]:
+            try:
+                raw_command = control_path.read_text(encoding="utf-8").strip().lower()
+            except FileNotFoundError:
+                raw_command = ""
+            except Exception as exc:
+                print(f"Error reading control file {control_path}: {exc}")
+                raw_command = ""
+
+            if raw_command and raw_command != last_raw_command:
+                last_raw_command = raw_command
+                command = raw_command.split(maxsplit=1)[0]
+                if command == "finish":
+                    print("Control command received: finish current episode.")
+                    events["exit_early"] = True
+                elif command == "finish_wait":
+                    print("Control command received: finish current episode and wait for manual reset.")
+                    restart_requested.clear()
+                    manual_finish_wait.set()
+                    events["exit_early"] = True
+                elif command == "rerecord":
+                    print("Control command received: rerecord current episode.")
+                    events["rerecord_episode"] = True
+                    events["exit_early"] = True
+                elif command == "rerecord_wait":
+                    print("Control command received: discard current episode and wait for manual reset.")
+                    restart_requested.clear()
+                    manual_rerecord_wait.set()
+                    events["rerecord_episode"] = True
+                    events["exit_early"] = True
+                elif command == "restart":
+                    print("Control command received: manual reset complete, restart current episode.")
+                    restart_requested.set()
+                    events["exit_early"] = True
+                elif command == "stop":
+                    print("Control command received: stop recording.")
+                    events["stop_recording"] = True
+                    events["exit_early"] = True
+                    restart_requested.set()
+            time.sleep(0.1)
+
+    def watch_motion_file():
+        if not args.motion_file:
+            return
+        motion_path = Path(args.motion_file)
+        last_stamp = None
+        active_keys: set[str] = set()
+        while not control_stop.is_set() and not events["stop_recording"]:
+            keys: set[str] = set()
+            stamp = None
+            if gui_motion_enabled.is_set():
+                try:
+                    payload = json.loads(motion_path.read_text(encoding="utf-8") or "{}")
+                    keys = {str(key).lower() for key in payload.get("keys", [])}
+                    keys = keys.intersection(gui_motion_keys)
+                    stamp = payload.get("stamp")
+                except FileNotFoundError:
+                    keys = set()
+                except Exception as exc:
+                    if stamp != last_stamp:
+                        print(f"Error reading motion file {motion_path}: {exc}")
+                    keys = set()
+            if keys != active_keys or stamp != last_stamp:
+                for key in gui_motion_keys:
+                    keyboard.current_pressed[key] = key in keys
+                active_keys = keys
+                last_stamp = stamp
+            time.sleep(0.03)
+
+    control_thread = None
+    if args.control_file:
+        control_thread = threading.Thread(target=watch_control_file, daemon=True)
+        control_thread.start()
+    motion_thread = None
+    if args.motion_file:
+        motion_thread = threading.Thread(target=watch_motion_file, daemon=True)
+        motion_thread.start()
     init_rerun(session_name="lekiwi_record")
 
     if not robot.is_connected or not leader_arm.is_connected or not keyboard.is_connected:
@@ -133,6 +278,47 @@ def main():
 
     print("Starting record loop...")
     recorded_episodes = 0
+
+    def wait_for_gui_restart() -> bool:
+        """Allow GUI teleop during manual reset without adding frames to the dataset."""
+        events["exit_early"] = False
+        gui_motion_enabled.set()
+        while not events["stop_recording"] and not restart_requested.is_set():
+            record_loop(
+                robot=robot,
+                events=events,
+                fps=args.fps,
+                teleop=[leader_arm, keyboard],
+                control_time_s=0.5,
+                single_task=args.task_description,
+                display_data=True,
+                teleop_action_processor=teleop_action_processor,
+                robot_action_processor=robot_action_processor,
+                robot_observation_processor=robot_observation_processor,
+                preview_callback=preview_writer,
+            )
+        gui_motion_enabled.clear()
+        for key in gui_motion_keys:
+            keyboard.current_pressed[key] = False
+        restart_requested.clear()
+        events["exit_early"] = False
+        return not events["stop_recording"]
+
+    def handle_manual_finish_wait() -> bool:
+        nonlocal recorded_episodes
+
+        log_say("Save episode before manual reset")
+        dataset.save_episode()
+        recorded_episodes += 1
+        manual_finish_wait.clear()
+        return wait_for_gui_restart()
+
+    def handle_manual_rerecord_wait() -> bool:
+        log_say("Discard episode and wait for manual reset")
+        dataset.clear_episode_buffer()
+        events["rerecord_episode"] = False
+        manual_rerecord_wait.clear()
+        return wait_for_gui_restart()
 
     while recorded_episodes < args.num_episodes and not events["stop_recording"]:
         log_say(f"Recording episode {recorded_episodes + 1} of {args.num_episodes}")
@@ -150,7 +336,18 @@ def main():
             teleop_action_processor=teleop_action_processor,
             robot_action_processor=robot_action_processor,
             robot_observation_processor=robot_observation_processor,
+            preview_callback=preview_writer,
         )
+
+        if manual_finish_wait.is_set():
+            if not handle_manual_finish_wait():
+                break
+            continue
+
+        if events["rerecord_episode"] and manual_rerecord_wait.is_set():
+            if not handle_manual_rerecord_wait():
+                break
+            continue
 
         # === Reset environment ===
         if not events["stop_recording"] and (
@@ -168,7 +365,18 @@ def main():
                 teleop_action_processor=teleop_action_processor,
                 robot_action_processor=robot_action_processor,
                 robot_observation_processor=robot_observation_processor,
+                preview_callback=preview_writer,
             )
+
+        if manual_finish_wait.is_set():
+            if not handle_manual_finish_wait():
+                break
+            continue
+
+        if events["rerecord_episode"] and manual_rerecord_wait.is_set():
+            if not handle_manual_rerecord_wait():
+                break
+            continue
 
         if events["rerecord_episode"]:
             log_say("Re-record episode")
@@ -185,7 +393,13 @@ def main():
     robot.disconnect()
     leader_arm.disconnect()
     keyboard.disconnect()
-    listener.stop()
+    if listener is not None:
+        listener.stop()
+    control_stop.set()
+    if control_thread is not None:
+        control_thread.join(timeout=1)
+    if motion_thread is not None:
+        motion_thread.join(timeout=1)
     dataset.finalize()
     print(f"Dataset saved locally at: {dataset.root.resolve()}")
     if args.push_to_hub:
