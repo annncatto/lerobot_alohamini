@@ -1,6 +1,9 @@
 import math
 
-from qt_compat import QComboBox, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget, Qt
+from qt_compat import QCheckBox, QComboBox, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget, Qt
+
+
+CAMERA_CATALOG = ["forward", "backward", "chest", "wrist_left", "wrist_right"]
 
 
 class CameraPanel(QWidget):
@@ -9,9 +12,12 @@ class CameraPanel(QWidget):
         self.source = QComboBox()
         self.source.addItems(["auto"])
         self.source.setEditable(False)
-        self.connect = QPushButton("连接机器人相机")
+        self.connect = QPushButton("打开已选相机")
         self.disconnect = QPushButton("停止机器人相机")
         self.capture = QPushButton("保存当前帧")
+        self.apply_selection = QPushButton("应用并打开")
+        self.save_selection = QPushButton("保存相机配置")
+        self.camera_checks: dict[str, QCheckBox] = {}
         self.frames: dict[str, QLabel] = {}
         self.frame_names: list[str] = []
         self._title_labels: dict[str, QLabel] = {}
@@ -23,18 +29,39 @@ class CameraPanel(QWidget):
         toolbar.addWidget(self.disconnect)
         toolbar.addWidget(self.capture)
 
+        selection = QHBoxLayout()
+        selection.addWidget(QLabel("启用"))
+        for name in CAMERA_CATALOG:
+            check = QCheckBox(name)
+            self.camera_checks[name] = check
+            selection.addWidget(check)
+        self.apply_selection.setToolTip("应用当前勾选的相机列表，并打开机器人相机预览。")
+        self.save_selection.setToolTip("把当前勾选的相机列表保存到 config.env 的 ALOHAMINI_CAMERAS。")
+        selection.addWidget(self.apply_selection)
+        selection.addWidget(self.save_selection)
+        selection.addStretch(1)
+
         self.grid = QGridLayout()
 
         layout = QVBoxLayout(self)
         layout.addLayout(toolbar)
+        layout.addLayout(selection)
         layout.addLayout(self.grid, 1)
         self.set_frame_names([])
+
+    def set_enabled_cameras(self, names: list[str]) -> None:
+        selected = set(names)
+        for name, check in self.camera_checks.items():
+            check.setChecked(name in selected)
+
+    def selected_cameras(self) -> list[str]:
+        return [name for name in CAMERA_CATALOG if self.camera_checks[name].isChecked()]
 
     def _make_frame(self, text: str) -> QLabel:
         frame = QLabel(text)
         frame.setObjectName("cameraFrame")
         frame.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        frame.setMinimumSize(320, 240)
+        frame.setMinimumSize(240, 160)
         frame.setScaledContents(False)
         return frame
 

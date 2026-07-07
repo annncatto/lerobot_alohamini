@@ -67,24 +67,24 @@ class AppContext:
         self.scripts = ScriptController(self.config)
 
     def save_pi_target(self, pi_user: str, pi_host: str) -> None:
+        self.save_env_values({"PI_USER": pi_user, "PI_HOST": pi_host})
+
+    def save_env_values(self, values: dict[str, str]) -> None:
         path = self.config.ops_dir / "config.env"
         lines = path.read_text(encoding="utf-8").splitlines()
         seen = set()
         new_lines = []
         for line in lines:
             stripped = line.strip()
-            if stripped.startswith("PI_USER="):
-                new_lines.append(f"PI_USER={pi_user}")
-                seen.add("PI_USER")
-            elif stripped.startswith("PI_HOST="):
-                new_lines.append(f"PI_HOST={pi_host}")
-                seen.add("PI_HOST")
+            key = stripped.split("=", 1)[0] if "=" in stripped else ""
+            if key in values:
+                new_lines.append(f"{key}={values[key]}")
+                seen.add(key)
             else:
                 new_lines.append(line)
-        if "PI_USER" not in seen:
-            new_lines.append(f"PI_USER={pi_user}")
-        if "PI_HOST" not in seen:
-            new_lines.append(f"PI_HOST={pi_host}")
+        for key, value in values.items():
+            if key not in seen:
+                new_lines.append(f"{key}={value}")
         path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
 
 

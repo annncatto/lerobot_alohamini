@@ -1,14 +1,9 @@
-from qt_compat import QCheckBox, QGridLayout, QGroupBox, QLabel, QLineEdit, QPushButton, QSizePolicy, QVBoxLayout, QWidget, Qt
+from qt_compat import QCheckBox, QGridLayout, QGroupBox, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget
 
 
 class ConnectionTab(QWidget):
     def __init__(self, context):
         super().__init__()
-        self.status = QLabel("未连接")
-        self.status.setObjectName("connectionStatus")
-        self.status.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.status.setFixedHeight(36)
-        self.status.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.pi_user = QLineEdit(context.config.pi_user)
         self.pi_host = QLineEdit(context.config.pi_host)
         self.apply_pi = QPushButton("应用连接配置")
@@ -26,8 +21,8 @@ class ConnectionTab(QWidget):
 
         box = QGroupBox("连接")
         box_layout = QVBoxLayout(box)
-        box_layout.setContentsMargins(18, 24, 18, 18)
-        box_layout.setSpacing(12)
+        box_layout.setContentsMargins(16, 8, 16, 14)
+        box_layout.setSpacing(8)
 
         target_grid = QGridLayout()
         target_grid.addWidget(QLabel("Pi 用户"), 0, 0)
@@ -35,11 +30,7 @@ class ConnectionTab(QWidget):
         target_grid.addWidget(QLabel("Pi 地址"), 1, 0)
         target_grid.addWidget(self.pi_host, 1, 1)
 
-        for widget in [
-            self.status,
-            self.model_info,
-        ]:
-            box_layout.addWidget(widget)
+        box_layout.addWidget(self.model_info)
         box_layout.addLayout(target_grid)
         box_layout.addWidget(self.apply_pi)
         box_layout.addWidget(self.save_pi)

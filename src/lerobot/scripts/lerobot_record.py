@@ -239,6 +239,7 @@ def record_loop(
     display_data: bool = False,
     display_compressed_images: bool = False,
     preview_callback: Callable[[RobotObservation], None] | None = None,
+    frame_callback: Callable[[int, int, float], None] | None = None,
 ):
     if dataset is not None and dataset.fps != fps:
         raise ValueError(f"The dataset fps should be equal to requested fps ({dataset.fps} != {fps}).")
@@ -344,6 +345,15 @@ def record_loop(
             action_frame = build_dataset_frame(dataset.features, action_values, prefix=ACTION)
             frame = {**observation_frame, **action_frame, "task": single_task}
             dataset.add_frame(frame)
+            if frame_callback is not None:
+                try:
+                    episode_buffer = dataset.writer.episode_buffer if dataset.writer is not None else None
+                    if episode_buffer is not None:
+                        frame_index = int(episode_buffer["size"]) - 1
+                        episode_index = int(episode_buffer["episode_index"])
+                        frame_callback(episode_index, frame_index, frame_index / fps)
+                except Exception as exc:
+                    logging.warning("Frame callback failed: %s", exc)
 
         if display_data:
             log_rerun_data(

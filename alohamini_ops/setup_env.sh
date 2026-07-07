@@ -4,6 +4,29 @@ set -euo pipefail
 OPS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$OPS_DIR/config.env"
 
+INSTALL_VOICE=0
+for arg in "$@"; do
+  case "$arg" in
+    --voice)
+      INSTALL_VOICE=1
+      ;;
+    -h|--help)
+      cat <<'MSG'
+Usage:
+  alohamini_ops/setup_env.sh [--voice]
+
+Default installs/checks only the basic GUI dependencies.
+Use --voice only when enabling microphone voice control.
+MSG
+      exit 0
+      ;;
+    *)
+      echo "ERROR: Unknown argument: $arg"
+      exit 1
+      ;;
+  esac
+done
+
 source "$CONDA_INIT_LOCAL"
 conda activate "$CONDA_ENV"
 
@@ -29,6 +52,15 @@ python -m pip --version
 echo
 echo "== Installing GUI dependencies =="
 python -m pip install -r "$OPS_DIR/requirements-gui.txt"
+if [[ "$INSTALL_VOICE" == "1" ]]; then
+  echo
+  echo "== Installing optional voice-control dependencies =="
+  python -m pip install -r "$OPS_DIR/requirements-voice.txt"
+else
+  echo
+  echo "== Skipping optional voice-control dependencies =="
+  echo "Run '$OPS_DIR/setup_env.sh --voice' only if you need microphone voice control."
+fi
 
 echo
 echo "== Verifying runtime imports =="
@@ -54,6 +86,25 @@ for name in checks:
 if failed:
     raise SystemExit(1)
 PY
+
+if [[ "$INSTALL_VOICE" == "1" ]]; then
+  echo
+  echo "== Verifying optional voice imports =="
+  python - <<'PY'
+checks = ["sounddevice", "faster_whisper"]
+failed = False
+for name in checks:
+    try:
+        module = __import__(name)
+        version = getattr(module, "__version__", "")
+        print(f"{name}: OK {version}")
+    except Exception as exc:
+        failed = True
+        print(f"{name}: FAIL {type(exc).__name__}: {exc}")
+if failed:
+    raise SystemExit(1)
+PY
+fi
 
 echo
 echo "== Qt platform check =="

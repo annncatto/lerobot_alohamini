@@ -32,6 +32,8 @@ class LogPanel(QWidget):
         self.save_button = QPushButton("保存")
         self.text = QTextEdit()
         self.text.setReadOnly(True)
+        self.text.setMinimumHeight(80)
+        self.setMinimumHeight(110)
 
         toolbar = QHBoxLayout()
         toolbar.addWidget(self.level_filter)

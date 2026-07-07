@@ -8,6 +8,7 @@ from qt_compat import QObject, Signal, Slot
 class CommandWorker(QObject):
     log = Signal(str, str)
     finished = Signal(int)
+    result = Signal(str, int, str)
 
     def __init__(self, command: list[str], cwd: str, env: dict[str, str], label: str):
         super().__init__()
@@ -16,6 +17,7 @@ class CommandWorker(QObject):
         self.env = env
         self.label = label
         self.proc: subprocess.Popen | None = None
+        self._lines: list[str] = []
 
     @Slot()
     def run(self) -> None:
@@ -32,11 +34,16 @@ class CommandWorker(QObject):
             )
             assert self.proc.stdout is not None
             for line in self.proc.stdout:
-                self.log.emit("INFO", line.rstrip())
+                text = line.rstrip()
+                self._lines.append(text)
+                self.log.emit("INFO", text)
             code = self.proc.wait()
         except Exception as exc:
-            self.log.emit("ERROR", f"{self.label}: {exc}")
+            text = f"{self.label}: {exc}"
+            self._lines.append(text)
+            self.log.emit("ERROR", text)
             code = 1
+        self.result.emit(self.label, code, "\n".join(self._lines))
         self.finished.emit(code)
 
     @Slot()

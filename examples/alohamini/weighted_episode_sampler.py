@@ -4,19 +4,24 @@
 用途：
 - 不删除早期或质量稍差的 episode，只降低它们被抽到的概率。
 - 可按 episode 长度自动修正权重：长 episode 稍降权，短 episode 稍升权。
+- 可按 frame 动作自动加权：底盘横/纵移动、夹爪打开、放置阶段更常被抽到。
 
 采样方式：
 1. 先按 episode 权重随机抽一个 episode。
-2. 再在这个 episode 内均匀随机抽一个 frame。
+2. 再在这个 episode 内按 frame 权重抽一个 frame；没有 frame 权重时退回均匀随机。
 
 常用参数：
 - first_n_episodes / first_n_weight：给前 N 个 episode 调权；first_n_episodes=0 表示关闭。
 - length_weight_power：开启长度修正；0 表示关闭，0.5 比较温和。
 - min/max_length_multiplier：限制长度修正倍率，避免极端长短 episode 影响过大。
+- base_motion_multiplier：含有 |x.vel| 或 |y.vel| 的 frame 加权。
+- gripper_open_multiplier：夹爪向打开方向运动的 frame 加权。
+- placement_multiplier：每个 episode 末尾放置阶段 frame 加权。
 """
 
 import logging
 from collections.abc import Iterator
+from typing import Callable
 
 import numpy as np
 import torch
@@ -48,6 +53,14 @@ class WeightedEpisodeSampler:
         min_length_multiplier: float = 0.5,
         max_length_multiplier: float = 2.0,
         num_samples_per_epoch: int | None = None,
+        dataset_getter: Callable[[], object | None] | None = None,
+        base_motion_multiplier: float = 2.0,
+        base_motion_threshold: float = 1e-4,
+        gripper_open_multiplier: float = 2.0,
+        gripper_delta_threshold: float = 1e-3,
+        placement_multiplier: float = 1.5,
+        placement_last_fraction: float = 0.2,
+        max_frame_multiplier: float = 6.0,
     ):
         if drop_n_first_frames < 0:
             raise ValueError(f"drop_n_first_frames must be >= 0, got {drop_n_first_frames}")
@@ -68,6 +81,20 @@ class WeightedEpisodeSampler:
                 "min_length_multiplier must be <= max_length_multiplier, "
                 f"got {min_length_multiplier} > {max_length_multiplier}"
             )
+        for name, value in {
+            "base_motion_multiplier": base_motion_multiplier,
+            "gripper_open_multiplier": gripper_open_multiplier,
+            "placement_multiplier": placement_multiplier,
+            "max_frame_multiplier": max_frame_multiplier,
+        }.items():
+            if value <= 0:
+                raise ValueError(f"{name} must be > 0, got {value}")
+        if base_motion_threshold < 0:
+            raise ValueError(f"base_motion_threshold must be >= 0, got {base_motion_threshold}")
+        if gripper_delta_threshold < 0:
+            raise ValueError(f"gripper_delta_threshold must be >= 0, got {gripper_delta_threshold}")
+        if not 0 <= placement_last_fraction <= 1:
+            raise ValueError(f"placement_last_fraction must be in [0, 1], got {placement_last_fraction}")
 
         from_indices = np.asarray(dataset_from_indices, dtype=np.int64)
         to_indices = np.asarray(dataset_to_indices, dtype=np.int64)
@@ -123,6 +150,16 @@ class WeightedEpisodeSampler:
         length_multipliers = length_multipliers[valid_weight_mask]
         weights = weights[valid_weight_mask]
         self._episode_probs = torch.as_tensor(weights / weights.sum(), dtype=torch.double)
+        self._frame_cdfs = self._build_frame_cdfs(
+            dataset_getter=dataset_getter,
+            base_motion_multiplier=base_motion_multiplier,
+            base_motion_threshold=base_motion_threshold,
+            gripper_open_multiplier=gripper_open_multiplier,
+            gripper_delta_threshold=gripper_delta_threshold,
+            placement_multiplier=placement_multiplier,
+            placement_last_fraction=placement_last_fraction,
+            max_frame_multiplier=max_frame_multiplier,
+        )
 
         self.shuffle = shuffle
         self.seed = seed
@@ -142,6 +179,129 @@ class WeightedEpisodeSampler:
             float(length_multipliers.min()),
             float(length_multipliers.max()),
         )
+
+    def _build_frame_cdfs(
+        self,
+        dataset_getter: Callable[[], object | None] | None,
+        base_motion_multiplier: float,
+        base_motion_threshold: float,
+        gripper_open_multiplier: float,
+        gripper_delta_threshold: float,
+        placement_multiplier: float,
+        placement_last_fraction: float,
+        max_frame_multiplier: float,
+    ) -> list[np.ndarray] | None:
+        """Build per-episode CDFs for frame-level weighted sampling.
+
+        这里不改 ACT loss，只改变 frame 被采样到的概率：
+        - 底盘 x/y 速度明显不为 0 的 frame 更常出现。
+        - 夹爪向打开方向变化的 frame 更常出现。
+        - episode 末尾默认视作放置阶段，更常出现。
+        """
+        if dataset_getter is None:
+            return None
+        dataset = dataset_getter()
+        if dataset is None:
+            logger.warning("Frame weighting requested but dataset is not available. Using uniform frames.")
+            return None
+
+        action_names = self._get_action_names(dataset)
+        if not action_names:
+            logger.warning("Dataset action names are unavailable. Using uniform frames.")
+            return None
+
+        try:
+            actions = np.asarray(dataset.hf_dataset["action"], dtype=np.float32)
+        except Exception as exc:
+            logger.warning("Could not read dataset action column for frame weighting: %s", exc)
+            return None
+        if actions.ndim != 2:
+            logger.warning("Expected action array shape [frames, dim], got %s. Using uniform frames.", actions.shape)
+            return None
+
+        name_to_idx = {name: i for i, name in enumerate(action_names)}
+        x_idx = name_to_idx.get("x.vel")
+        y_idx = name_to_idx.get("y.vel")
+        gripper_indices = [
+            i for i, name in enumerate(action_names) if "gripper" in name.lower() and name.endswith(".pos")
+        ]
+
+        frame_cdfs: list[np.ndarray] = []
+        base_hits = 0
+        gripper_hits = 0
+        placement_hits = 0
+        total_valid_frames = 0
+
+        for start, length in zip(self._starts, self._lengths, strict=True):
+            end = int(start + length)
+            episode_actions = actions[int(start) : end]
+            if len(episode_actions) != int(length):
+                logger.warning("Action array is shorter than expected. Using uniform frames.")
+                return None
+
+            frame_weights = np.ones(int(length), dtype=np.float64)
+
+            if x_idx is not None or y_idx is not None:
+                moving = np.zeros(int(length), dtype=bool)
+                if x_idx is not None:
+                    moving |= np.abs(episode_actions[:, x_idx]) > base_motion_threshold
+                if y_idx is not None:
+                    moving |= np.abs(episode_actions[:, y_idx]) > base_motion_threshold
+                frame_weights[moving] *= base_motion_multiplier
+                base_hits += int(moving.sum())
+
+            if gripper_indices and gripper_open_multiplier != 1.0 and int(length) > 1:
+                opening = np.zeros(int(length), dtype=bool)
+                for idx in gripper_indices:
+                    values = episode_actions[:, idx].astype(np.float64)
+                    # 自动判断打开方向：默认 episode 末尾更接近“打开/释放”状态。
+                    head = values[: max(1, int(0.1 * len(values)))].mean()
+                    tail = values[-max(1, int(0.1 * len(values))) :].mean()
+                    direction = 1.0 if tail >= head else -1.0
+                    delta = np.diff(values, prepend=values[0])
+                    opening |= direction * delta > gripper_delta_threshold
+                frame_weights[opening] *= gripper_open_multiplier
+                gripper_hits += int(opening.sum())
+
+            if placement_multiplier != 1.0 and placement_last_fraction > 0:
+                placement_count = int(np.ceil(int(length) * placement_last_fraction))
+                if placement_count > 0:
+                    placement = np.zeros(int(length), dtype=bool)
+                    placement[-placement_count:] = True
+                    frame_weights[placement] *= placement_multiplier
+                    placement_hits += int(placement.sum())
+
+            frame_weights = np.clip(frame_weights, 1e-12, max_frame_multiplier)
+            frame_cdfs.append(np.cumsum(frame_weights) / frame_weights.sum())
+            total_valid_frames += int(length)
+
+        logger.info(
+            "Frame weighting: frames=%d, base_motion_hits=%d, gripper_open_hits=%d, "
+            "placement_hits=%d, multipliers(base=%.2f, gripper=%.2f, placement=%.2f, cap=%.2f)",
+            total_valid_frames,
+            base_hits,
+            gripper_hits,
+            placement_hits,
+            base_motion_multiplier,
+            gripper_open_multiplier,
+            placement_multiplier,
+            max_frame_multiplier,
+        )
+        return frame_cdfs
+
+    @staticmethod
+    def _get_action_names(dataset: object) -> list[str]:
+        features = getattr(getattr(dataset, "meta", None), "features", None)
+        if features is None:
+            return []
+        action_feature = features.get("action") if isinstance(features, dict) else None
+        if action_feature is None:
+            return []
+        if isinstance(action_feature, dict):
+            names = action_feature.get("names")
+        else:
+            names = getattr(action_feature, "names", None)
+        return list(names or [])
 
     @property
     def indices(self) -> list[int]:
@@ -178,8 +338,16 @@ class WeightedEpisodeSampler:
             generator=generator,
         ).numpy()
         random_unit = torch.rand(self._num_samples, generator=generator).numpy()
-        offsets = (random_unit * self._lengths[episode_draws]).astype(np.int64)
-        frame_indices = self._starts[episode_draws] + offsets
+        if self._frame_cdfs is None:
+            offsets = (random_unit * self._lengths[episode_draws]).astype(np.int64)
+            frame_indices = self._starts[episode_draws] + offsets
+        else:
+            frame_indices = np.empty(self._num_samples, dtype=np.int64)
+            for episode_pos in np.unique(episode_draws):
+                sample_mask = episode_draws == episode_pos
+                offsets = np.searchsorted(self._frame_cdfs[int(episode_pos)], random_unit[sample_mask], side="right")
+                offsets = np.minimum(offsets, self._lengths[int(episode_pos)] - 1)
+                frame_indices[sample_mask] = self._starts[int(episode_pos)] + offsets
 
         for k in range(start, self._num_samples):
             yield int(frame_indices[k])

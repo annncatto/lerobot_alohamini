@@ -43,6 +43,7 @@ class UiManager:
         self.host_alert = QLabel("")
         self.visual_status = QLabel("总控状态、视频、地图、传感器信息会显示在右侧工作区")
         self.action_state = QLabel("x=0.000  y=0.000  theta=0.0  lift=0")
+        self.diagnostic_status = QLabel("诊断摘要\n尚未运行诊断。")
 
     def build(self) -> QWidget:
         root = QWidget()
@@ -53,7 +54,7 @@ class UiManager:
         splitter.addWidget(self._build_left())
         splitter.addWidget(self._build_right())
         splitter.setSizes([380, 900])
-        splitter.setChildrenCollapsible(False)
+        splitter.setChildrenCollapsible(True)
 
         root_layout.addWidget(splitter, 1)
         root_layout.addWidget(self.status_line)
@@ -74,8 +75,10 @@ class UiManager:
         tabs.addTab(self._scroll_page(self.diagnostics_tab), "诊断")
         splitter.addWidget(tabs)
         splitter.addWidget(self.log_panel)
-        splitter.setSizes([430, 260])
-        splitter.setChildrenCollapsible(False)
+        splitter.setSizes([430, 220])
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 1)
+        splitter.setChildrenCollapsible(True)
         layout.addWidget(splitter, 1)
         return panel
 
@@ -109,8 +112,10 @@ class UiManager:
         splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.addWidget(summary)
         splitter.addWidget(tabs)
-        splitter.setSizes([90, 620])
-        splitter.setChildrenCollapsible(False)
+        splitter.setSizes([80, 620])
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setChildrenCollapsible(True)
         layout.addWidget(splitter, 1)
         return panel
 
@@ -123,7 +128,10 @@ class UiManager:
         self.visual_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.visual_status.setWordWrap(True)
         self.action_state.setObjectName("actionState")
+        self.diagnostic_status.setObjectName("diagnosticStatus")
+        self.diagnostic_status.setWordWrap(True)
         visual_layout.addWidget(self.visual_status, 1)
+        visual_layout.addWidget(self.diagnostic_status)
         visual_layout.addWidget(self.action_state)
         return visual
 

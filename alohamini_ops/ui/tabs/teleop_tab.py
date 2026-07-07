@@ -34,8 +34,8 @@ class TeleopTab(QWidget):
 
         box = QGroupBox("底盘 / 升降控制")
         box_layout = QVBoxLayout(box)
-        box_layout.setContentsMargins(18, 24, 18, 18)
-        box_layout.setSpacing(12)
+        box_layout.setContentsMargins(16, 8, 16, 14)
+        box_layout.setSpacing(8)
         box_layout.addWidget(self.global_keys)
         box_layout.addWidget(self.voice_control)
         box_layout.addWidget(self.estop)

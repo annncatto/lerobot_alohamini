@@ -1,4 +1,13 @@
-from qt_compat import QCheckBox, QGridLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget
+from qt_compat import (
+    QCheckBox,
+    QGridLayout,
+    QGroupBox,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 
 class DatasetTab(QWidget):
@@ -14,6 +23,19 @@ class DatasetTab(QWidget):
         self.push_to_hub = QCheckBox("采集后上传到 Hugging Face Hub")
         self.push_to_hub.setChecked(False)
         self.resume = QCheckBox("继续写入已有数据集")
+        self.phase_markers_enabled = QCheckBox("启用旁路阶段标注，不写入 LeRobot 主数据")
+        self.phase_markers_enabled.setChecked(True)
+        self.phase_key_grasp = QLineEdit("1")
+        self.phase_label_grasp = QLineEdit("start_of_grasp")
+        self.phase_key_scan = QLineEdit("2")
+        self.phase_label_scan = QLineEdit("start_of_scan")
+        self.phase_key_place = QLineEdit("3")
+        self.phase_label_place = QLineEdit("start_of_place")
+        self.phase_mark_grasp = QPushButton("标注抓取开始")
+        self.phase_mark_scan = QPushButton("标注扫描开始")
+        self.phase_mark_place = QPushButton("标注放置开始")
+        for button in (self.phase_mark_grasp, self.phase_mark_scan, self.phase_mark_place):
+            button.setEnabled(False)
         self.start_record = QPushButton("开始数据采集")
         self.finish_episode = QPushButton("完成当前段并保存")
         self.finish_episode.setEnabled(False)
@@ -71,6 +93,31 @@ class DatasetTab(QWidget):
             grid.addWidget(QLabel(label), row, 0)
             grid.addWidget(widget, row, 1)
         layout.addLayout(grid)
+
+        phase_box = QGroupBox("旁路阶段标注")
+        phase_layout = QVBoxLayout(phase_box)
+        phase_hint = QLabel(
+            "采集中按热键或按钮写入独立 jsonl 标注文件；不会改变图像、动作、状态、task 或 LeRobot metadata。"
+        )
+        phase_hint.setWordWrap(True)
+        phase_layout.addWidget(phase_hint)
+        phase_layout.addWidget(self.phase_markers_enabled)
+        phase_grid = QGridLayout()
+        phase_grid.addWidget(QLabel("热键"), 0, 0)
+        phase_grid.addWidget(QLabel("阶段文本"), 0, 1)
+        phase_grid.addWidget(QLabel("按钮"), 0, 2)
+        phase_rows = [
+            (self.phase_key_grasp, self.phase_label_grasp, self.phase_mark_grasp),
+            (self.phase_key_scan, self.phase_label_scan, self.phase_mark_scan),
+            (self.phase_key_place, self.phase_label_place, self.phase_mark_place),
+        ]
+        for row, (key_widget, label_widget, button) in enumerate(phase_rows, start=1):
+            phase_grid.addWidget(key_widget, row, 0)
+            phase_grid.addWidget(label_widget, row, 1)
+            phase_grid.addWidget(button, row, 2)
+        phase_layout.addLayout(phase_grid)
+        layout.addWidget(phase_box)
+
         layout.addWidget(self.resume)
         layout.addWidget(self.push_to_hub)
         layout.addWidget(self.start_record)
@@ -99,3 +146,22 @@ class DatasetTab(QWidget):
             args.append("--resume")
         args.extend(["--push_to_hub", "true" if self.push_to_hub.isChecked() else "false"])
         return args
+
+    def phase_marker_specs(self) -> list[dict[str, str]]:
+        if not self.phase_markers_enabled.isChecked():
+            return []
+        specs = [
+            ("grasp", self.phase_key_grasp.text(), self.phase_label_grasp.text()),
+            ("scan", self.phase_key_scan.text(), self.phase_label_scan.text()),
+            ("place", self.phase_key_place.text(), self.phase_label_place.text()),
+        ]
+        result = []
+        used_keys = set()
+        for name, key, label in specs:
+            key = key.strip().lower()
+            label = label.strip()
+            if not key or not label or key in used_keys:
+                continue
+            used_keys.add(key)
+            result.append({"name": name, "key": key, "label": label})
+        return result

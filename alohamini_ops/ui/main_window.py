@@ -1,10 +1,24 @@
+import os
+import re
 import subprocess
 import time
 import json
 from pathlib import Path
 
 from app.context import AppContext
-from qt_compat import QApplication, QEvent, QFileDialog, QMainWindow, QPixmap, QThread, QTimer, Qt, Slot
+from qt_compat import (
+    QApplication,
+    QEvent,
+    QFileDialog,
+    QLineEdit,
+    QMainWindow,
+    QPixmap,
+    QTextEdit,
+    QThread,
+    QTimer,
+    Qt,
+    Slot,
+)
 from ui.presenters.status_presenter import StatusPresenter
 from ui.ui_manager import UiManager
 from workers.command_worker import CommandWorker
@@ -33,6 +47,7 @@ QLabel#summaryTile { background: #151a1f; border: 1px solid #303943; border-radi
 QLabel#hostAlert { background: #5b1f1f; border: 1px solid #d04b4b; border-radius: 5px; padding: 8px; font-weight: 700; }
 QLabel#connectionStatus { background: #151a1f; border-radius: 5px; padding: 8px; font-weight: 700; }
 QLabel#actionState { background: #151a1f; padding: 8px; border-radius: 4px; font-family: monospace; }
+QLabel#diagnosticStatus { background: #151a1f; border: 1px solid #303943; border-radius: 5px; padding: 8px; font-family: monospace; }
 """
 
 
@@ -49,10 +64,16 @@ class MainWindow(QMainWindow):
         self.record_worker: CommandWorker | None = None
         self.record_control_file = self.context.config.ops_dir / "record_control.txt"
         self.record_motion_file = self.context.config.ops_dir / "record_motion.json"
+        self.record_phase_marker_file = self.context.config.ops_dir / "record_phase_markers.jsonl"
+        self.record_phase_marker_output: Path | None = None
         self.record_preview_dir = self.context.config.ops_dir / "record_preview"
         self.record_preview_thread: QThread | None = None
         self.record_preview_worker: RecordPreviewWorker | None = None
         self._record_reset_mode = False
+        self._record_stop_requested = False
+        self._record_force_stop_timer = QTimer(self)
+        self._record_force_stop_timer.setSingleShot(True)
+        self._record_force_stop_timer.timeout.connect(self._force_stop_record_after_timeout)
         self.eval_thread: QThread | None = None
         self.eval_worker: CommandWorker | None = None
         self.camera_thread: QThread | None = None
@@ -76,6 +97,7 @@ class MainWindow(QMainWindow):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setCentralWidget(self.ui.build())
         self.setStyleSheet(STYLE)
+        self.ui.camera_panel.set_enabled_cameras(self._configured_cameras())
 
         self._connect_signals()
         QApplication.instance().installEventFilter(self)
@@ -119,6 +141,9 @@ class MainWindow(QMainWindow):
         ds.rerecord_episode.clicked.connect(self.rerecord_record_episode)
         ds.restart_episode.clicked.connect(self.restart_record_episode)
         ds.stop_record.clicked.connect(self.stop_record)
+        ds.phase_mark_grasp.clicked.connect(lambda: self.mark_record_phase("grasp"))
+        ds.phase_mark_scan.clicked.connect(lambda: self.mark_record_phase("scan"))
+        ds.phase_mark_place.clicked.connect(lambda: self.mark_record_phase("place"))
 
         deploy = self.ui.deploy_tab
         deploy.check_model.clicked.connect(self.check_eval_model)
@@ -133,6 +158,7 @@ class MainWindow(QMainWindow):
         diag.status.clicked.connect(lambda: self.run_command("status", self.context.scripts.script("status.sh")))
         diag.local_servos.clicked.connect(lambda: self.run_command("check_local_servos", self.context.scripts.script("check_local_servos.sh")))
         diag.pi_servos.clicked.connect(lambda: self.run_command("check_pi_servos", self.context.scripts.script("check_pi_servos.sh")))
+        diag.serial_ports.clicked.connect(lambda: self.run_command("debug_serial_ports", self.context.scripts.script("debug_serial_ports.sh")))
         diag.lift_axis.clicked.connect(lambda: self.run_command("check_lift_axis", self.context.scripts.script("check_lift_axis.sh")))
         diag.host_log.clicked.connect(lambda: self.run_command("tail_host_log", self.context.scripts.ssh_tail_host_log()))
         diag.local_log.clicked.connect(lambda: self.run_command("local_teleop_log", ["bash", "-lc", "tail -120 /tmp/alohamini_teleop.log 2>/dev/null || true"]))
@@ -141,6 +167,8 @@ class MainWindow(QMainWindow):
         cam.connect.clicked.connect(self.start_camera)
         cam.disconnect.clicked.connect(self.stop_camera)
         cam.capture.clicked.connect(self.save_camera_frame)
+        cam.apply_selection.clicked.connect(self.start_camera)
+        cam.save_selection.clicked.connect(self.save_camera_selection)
         cam.source.currentTextChanged.connect(self.set_camera_source)
 
     def append_log(self, level: str, message: str) -> None:
@@ -174,7 +202,7 @@ class MainWindow(QMainWindow):
             return
         pi_user, pi_host = target
         self.context.set_pi_target(pi_user, pi_host)
-        self.ui.connection_tab.status.setText(f"目标: {pi_user}@{pi_host}")
+        self.ui.link_state.setText(f"网络链路\n目标 {pi_host}")
         self.ui.log_panel.append("INFO", f"已应用连接配置: {pi_user}@{pi_host}")
 
     @Slot()
@@ -192,7 +220,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self.ui.log_panel.append("ERROR", f"保存 config.env 失败: {exc}")
             return
-        self.ui.connection_tab.status.setText(f"目标: {pi_user}@{pi_host}")
+        self.ui.link_state.setText(f"网络链路\n目标 {pi_host}")
         self.ui.log_panel.append("INFO", f"已保存连接配置到 config.env: {pi_user}@{pi_host}")
 
     def _update_host_alert(self, message: str) -> None:
@@ -222,6 +250,7 @@ class MainWindow(QMainWindow):
         worker = CommandWorker(command, str(self.context.config.ops_dir), self.context.config.env, label)
         worker.moveToThread(thread)
         worker.log.connect(self.append_log)
+        worker.result.connect(self.handle_command_result)
         worker.finished.connect(lambda code: self.append_log("INFO" if code == 0 else "ERROR", f"{label} exited with {code}"))
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
@@ -241,6 +270,90 @@ class MainWindow(QMainWindow):
             "yes",
             "on",
         }
+
+    @Slot(str, int, str)
+    def handle_command_result(self, label: str, code: int, output: str) -> None:
+        if label in {"start_pi_host", "stop_pi_host", "status"}:
+            self._update_summary_from_command(label, code, output)
+        if label == "debug_serial_ports":
+            self.ui.diagnostic_status.setText(self._serial_debug_summary(code, output))
+        elif label in {"check_local_servos", "check_pi_servos", "check_lift_axis", "status"}:
+            self.ui.diagnostic_status.setText(self._general_diagnostic_summary(label, code, output))
+
+    def _update_summary_from_command(self, label: str, code: int, output: str) -> None:
+        if label == "start_pi_host":
+            if code == 0:
+                self.ui.host_state.setText("树莓派 Host\n运行中")
+                self.ui.link_state.setText("网络链路\n正常")
+            else:
+                self.ui.host_state.setText("树莓派 Host\n启动失败")
+                self.ui.link_state.setText("网络链路\n检查 SSH/日志")
+            return
+        if label == "stop_pi_host":
+            self.ui.host_state.setText("树莓派 Host\n已停止" if code == 0 else "树莓派 Host\n停止失败")
+            return
+        if label == "status":
+            host_ok = "lekiwi_host" in output
+            ssh_ok = code == 0
+            self.ui.host_state.setText("树莓派 Host\n运行中" if host_ok else "树莓派 Host\n未运行")
+            self.ui.link_state.setText("网络链路\n正常" if ssh_ok else "网络链路\n异常")
+
+    def _general_diagnostic_summary(self, label: str, code: int, output: str) -> str:
+        if label == "status":
+            local_ok = "/dev/am_arm_leader_left" in output and "/dev/am_arm_leader_right" in output
+            pi_ok = "/dev/am_arm_follower_left" in output and "/dev/am_arm_follower_right" in output
+            host_ok = "lekiwi_host" in output
+            lines = ["诊断摘要", "运行状态检查:"]
+            lines.append(f"  本机 Leader 串口: {'OK' if local_ok else '未完整识别'}")
+            lines.append(f"  树莓派 Follower 串口: {'OK' if pi_ok else '未完整识别'}")
+            lines.append(f"  Host 进程: {'运行中' if host_ok else '未运行或未检测到'}")
+            next_steps = []
+            if not local_ok or not pi_ok:
+                next_steps.append("运行“串口定位/舵机扫描”，确认 ttyACM 与 am_arm 映射。")
+            if not host_ok:
+                next_steps.append("在连接页点击“启动 Host”，再刷新状态。")
+            if code != 0:
+                next_steps.append("检查 PI_HOST/PI_USER、网络和 SSH。")
+            lines.append("下一步:")
+            lines.extend(f"  {step}" for step in (next_steps or ["状态基本正常，可以打开相机/遥操/采集。"]))
+            return "\n".join(lines)
+        if label == "check_lift_axis":
+            ok = code == 0 and "FAILED" not in output and "ERROR" not in output
+            return "\n".join(
+                [
+                    "诊断摘要",
+                    f"升降轴检查: {'通过' if ok else '需要处理'}",
+                    "下一步:",
+                    "  通过后再做遥操/采集；失败时先看左侧日志中的端口、ID、方向和反馈。",
+                ]
+            )
+        return f"诊断摘要\n{label}: {'完成' if code == 0 else '失败'}\n下一步:\n  完整输出见左侧日志。"
+
+    def _serial_debug_summary(self, code: int, output: str) -> str:
+        online = re.findall(r"Online IDs:\s*\[([^\]]*)\]\s*on\s*(\S+)", output)
+        issues = []
+        for prefix in ("MISSING", "PERMISSION", "FAILED", "TIMEOUT", "ERROR"):
+            for line in output.splitlines():
+                if line.startswith(f"{prefix}:"):
+                    issues.append(line)
+        lines = ["诊断摘要", f"机械臂串口调试: {'完成' if code == 0 else '有错误'}"]
+        if online:
+            lines.append("扫描到舵机:")
+            for ids, port in online[:10]:
+                lines.append(f"  {port}: IDs [{ids.strip()}]")
+        else:
+            lines.append("未扫描到舵机 ID，检查供电、USB、权限或端口占用。")
+        if issues:
+            lines.append("注意:")
+            for issue in issues[:8]:
+                lines.append(f"  {issue}")
+        lines.append("下一步:")
+        if not online:
+            lines.append("  确认机械臂供电、USB 连接、dialout 权限；Host 运行时可能占用 Pi 串口。")
+        else:
+            lines.append("  按 ID 分布确认 am_arm 链接是否指向正确 ttyACM；错误时修 udev 或重新插线。")
+        lines.append("完整日志见左侧日志面板。")
+        return "\n".join(lines)
 
     def open_terminal(self, script_name: str) -> None:
         try:
@@ -330,6 +443,15 @@ class MainWindow(QMainWindow):
                 json.dumps({"keys": [], "stamp": time.time_ns()}),
                 encoding="utf-8",
             )
+            self.record_phase_marker_file.write_text("", encoding="utf-8")
+            self.record_phase_marker_output = None
+            phase_specs = self.ui.dataset_tab.phase_marker_specs()
+            if phase_specs:
+                marker_dir = self.context.config.dataset_home / "_phase_markers"
+                marker_dir.mkdir(parents=True, exist_ok=True)
+                safe_dataset_id = re.sub(r"[^A-Za-z0-9_.-]+", "__", dataset_id).strip("_")
+                session_stamp = time.strftime("%Y%m%d_%H%M%S")
+                self.record_phase_marker_output = marker_dir / f"{safe_dataset_id}_{session_stamp}.jsonl"
             self.record_preview_dir.mkdir(parents=True, exist_ok=True)
             for path in self.record_preview_dir.glob("*.jpg"):
                 path.unlink()
@@ -341,6 +463,9 @@ class MainWindow(QMainWindow):
         args.extend(["--motion_file", str(self.record_motion_file)])
         args.extend(["--preview_dir", str(self.record_preview_dir)])
         args.extend(["--preview_fps", self.context.config.env.get("ALOHAMINI_RECORD_PREVIEW_FPS", "8")])
+        if self.record_phase_marker_output is not None:
+            args.extend(["--phase_marker_file", str(self.record_phase_marker_file)])
+            args.extend(["--phase_marker_output", str(self.record_phase_marker_output)])
         command = self.context.scripts.script("start_record.sh") + args
         self.record_thread = QThread(self)
         self.record_worker = CommandWorker(
@@ -361,10 +486,17 @@ class MainWindow(QMainWindow):
         self.ui.dataset_tab.rerecord_episode.setEnabled(True)
         self.ui.dataset_tab.restart_episode.setEnabled(False)
         self.ui.dataset_tab.stop_record.setEnabled(True)
+        self.ui.dataset_tab.stop_record.setText("停止数据采集")
+        self._set_phase_marker_buttons_enabled(self.record_phase_marker_output is not None)
         self.ui.data_state.setText("数据采集\n运行中")
         self._record_reset_mode = False
+        self._record_stop_requested = False
         self._pressed_keyboard_keys.clear()
         self.ui.log_panel.append("INFO", "数据采集已在 GUI 后台启动。")
+        if self.record_phase_marker_output is not None:
+            specs_text = ", ".join(f"{spec['key']}={spec['label']}" for spec in self.ui.dataset_tab.phase_marker_specs())
+            self.ui.log_panel.append("INFO", f"旁路阶段标注已启用: {specs_text}")
+            self.ui.log_panel.append("INFO", f"阶段标注 sidecar: {self.record_phase_marker_output}")
         self.start_record_preview()
         self.record_thread.start()
 
@@ -373,10 +505,45 @@ class MainWindow(QMainWindow):
         if self.record_worker is None:
             self.ui.log_panel.append("WARN", "当前没有正在运行的数据采集。")
             return
-        self.ui.log_panel.append("WARN", "正在停止数据采集进程...")
+        if self._record_stop_requested:
+            self.ui.log_panel.append("WARN", "正在强制终止数据采集进程；未完成保存的数据可能损坏。")
+            self._record_force_stop_timer.stop()
+            self.record_worker.cancel()
+            return
+
+        self.ui.log_panel.append("WARN", "已请求停止数据采集；正在等待程序安全保存并退出，请不要关闭窗口。")
         self._record_reset_mode = False
+        self._record_stop_requested = True
         self._write_record_motion_keys(set())
         self._write_record_control("stop")
+        self.ui.dataset_tab.finish_episode.setEnabled(False)
+        self.ui.dataset_tab.rerecord_episode.setEnabled(False)
+        self.ui.dataset_tab.restart_episode.setEnabled(False)
+        self.ui.dataset_tab.stop_record.setText("强制停止采集")
+        self._set_phase_marker_buttons_enabled(False)
+        self.ui.data_state.setText("数据采集\n正在安全停止")
+
+        timeout_raw = self.context.config.env.get("ALOHAMINI_RECORD_STOP_TIMEOUT_S", "300")
+        try:
+            timeout_s = int(timeout_raw)
+        except ValueError:
+            timeout_s = 300
+            self.ui.log_panel.append(
+                "WARN",
+                f"ALOHAMINI_RECORD_STOP_TIMEOUT_S={timeout_raw!r} 不是有效秒数，使用默认 300 秒。",
+            )
+        if timeout_s > 0:
+            self._record_force_stop_timer.start(timeout_s * 1000)
+            self.ui.log_panel.append(
+                "INFO",
+                f"如果 {timeout_s} 秒后仍未退出，GUI 会执行强制终止。再次点击“强制停止采集”也会立即终止。",
+            )
+
+    @Slot()
+    def _force_stop_record_after_timeout(self) -> None:
+        if self.record_worker is None or not self._record_stop_requested:
+            return
+        self.ui.log_panel.append("ERROR", "数据采集安全停止超时，正在强制终止；请检查本次数据集是否完整。")
         self.record_worker.cancel()
 
     @Slot()
@@ -391,6 +558,7 @@ class MainWindow(QMainWindow):
         self.ui.dataset_tab.finish_episode.setEnabled(False)
         self.ui.dataset_tab.rerecord_episode.setEnabled(False)
         self.ui.dataset_tab.restart_episode.setEnabled(True)
+        self._set_phase_marker_buttons_enabled(False)
         self.ui.data_state.setText("数据采集\n等待复位")
         self.ui.log_panel.append(
             "INFO",
@@ -409,6 +577,7 @@ class MainWindow(QMainWindow):
         self.ui.dataset_tab.finish_episode.setEnabled(False)
         self.ui.dataset_tab.rerecord_episode.setEnabled(False)
         self.ui.dataset_tab.restart_episode.setEnabled(True)
+        self._set_phase_marker_buttons_enabled(False)
         self.ui.data_state.setText("数据采集\n等待复位")
         self.ui.log_panel.append(
             "WARN",
@@ -427,6 +596,7 @@ class MainWindow(QMainWindow):
         self.ui.dataset_tab.finish_episode.setEnabled(True)
         self.ui.dataset_tab.rerecord_episode.setEnabled(True)
         self.ui.dataset_tab.restart_episode.setEnabled(False)
+        self._set_phase_marker_buttons_enabled(self.record_phase_marker_output is not None)
         self.ui.data_state.setText("数据采集\n运行中")
         self.ui.log_panel.append("INFO", "已确认复位完成；record_bi.py 将继续采集。")
 
@@ -445,6 +615,75 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self.ui.log_panel.append("ERROR", f"写入复位遥操作命令失败: {exc}")
 
+    def _set_phase_marker_buttons_enabled(self, enabled: bool) -> None:
+        for button in (
+            self.ui.dataset_tab.phase_mark_grasp,
+            self.ui.dataset_tab.phase_mark_scan,
+            self.ui.dataset_tab.phase_mark_place,
+        ):
+            button.setEnabled(enabled)
+
+    def _phase_marker_spec_by_name(self, name: str) -> dict[str, str] | None:
+        for spec in self.ui.dataset_tab.phase_marker_specs():
+            if spec["name"] == name:
+                return spec
+        return None
+
+    def _phase_marker_spec_by_key(self, key: str) -> dict[str, str] | None:
+        for spec in self.ui.dataset_tab.phase_marker_specs():
+            if spec["key"] == key:
+                return spec
+        return None
+
+    def _is_text_input_focused(self) -> bool:
+        widget = QApplication.focusWidget()
+        return isinstance(widget, (QLineEdit, QTextEdit))
+
+    def _phase_key_from_event(self, event) -> str | None:
+        if event.isAutoRepeat():
+            return None
+        text = event.text()
+        if not text:
+            return None
+        return text.strip().lower()
+
+    @Slot(str)
+    def mark_record_phase(self, name: str) -> None:
+        spec = self._phase_marker_spec_by_name(name)
+        if spec is None:
+            self.ui.log_panel.append("WARN", f"阶段标注 {name} 未启用或配置不完整。")
+            return
+        self._write_record_phase_marker(spec)
+
+    def _write_record_phase_marker(self, spec: dict[str, str]) -> None:
+        if self.record_worker is None:
+            self.ui.log_panel.append("WARN", "当前没有正在运行的数据采集，阶段标注未写入。")
+            return
+        if self._record_reset_mode:
+            self.ui.log_panel.append("WARN", "当前处于复位等待阶段，阶段标注未写入。")
+            return
+        if self._record_stop_requested:
+            self.ui.log_panel.append("WARN", "数据采集正在停止，阶段标注未写入。")
+            return
+        if self.record_phase_marker_output is None:
+            self.ui.log_panel.append("WARN", "旁路阶段标注未启用。")
+            return
+        payload = {
+            "type": "phase_marker",
+            "name": spec["name"],
+            "label": spec["label"],
+            "key": spec["key"],
+            "dataset": self.ui.dataset_tab.dataset.text().strip(),
+            "wall_time_ns": time.time_ns(),
+        }
+        try:
+            with self.record_phase_marker_file.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        except Exception as exc:
+            self.ui.log_panel.append("ERROR", f"写入阶段标注失败: {exc}")
+            return
+        self.ui.log_panel.append("INFO", f"阶段标注: {spec['label']} -> {self.record_phase_marker_output}")
+
     @Slot(int)
     def _record_finished(self, code: int) -> None:
         level = "INFO" if code == 0 else "ERROR"
@@ -455,9 +694,16 @@ class MainWindow(QMainWindow):
         self.ui.dataset_tab.rerecord_episode.setEnabled(False)
         self.ui.dataset_tab.restart_episode.setEnabled(False)
         self.ui.dataset_tab.stop_record.setEnabled(False)
+        self.ui.dataset_tab.stop_record.setText("停止数据采集")
+        self._set_phase_marker_buttons_enabled(False)
+        self._record_force_stop_timer.stop()
         self._record_reset_mode = False
+        self._record_stop_requested = False
         self._pressed_keyboard_keys.clear()
         self._write_record_motion_keys(set())
+        if self.record_phase_marker_output is not None:
+            self.ui.log_panel.append("INFO", f"阶段标注 sidecar 已结束: {self.record_phase_marker_output}")
+        self.record_phase_marker_output = None
         self.record_worker = None
         self.record_thread = None
         self.stop_record_preview()
@@ -596,6 +842,8 @@ class MainWindow(QMainWindow):
         if self.record_thread is not None:
             self.ui.log_panel.append("WARN", "数据采集正在运行。采集进程已使用相机，请不要同时打开相机预览。")
             return
+        if not self._apply_camera_selection_if_safe(silent=True):
+            return
         if self.ui.camera_panel.source.currentText() != "auto":
             self.ui.camera_panel.source.setCurrentText("auto")
         if self.camera_thread is not None:
@@ -626,6 +874,49 @@ class MainWindow(QMainWindow):
         self.camera_thread.finished.connect(self.camera_thread.deleteLater)
         self.camera_thread.started.connect(self.camera_worker.run)
         self.camera_thread.start()
+
+    def _configured_cameras(self) -> list[str]:
+        raw = self.context.config.env.get("ALOHAMINI_CAMERAS", "forward,wrist_right")
+        names = [name.strip() for name in raw.split(",") if name.strip()]
+        return names or ["forward", "wrist_right"]
+
+    @Slot()
+    def apply_camera_selection(self) -> None:
+        self._apply_camera_selection_if_safe(silent=False)
+
+    @Slot()
+    def save_camera_selection(self) -> None:
+        if not self._apply_camera_selection_if_safe(silent=False):
+            return
+        value = self.context.config.env["ALOHAMINI_CAMERAS"]
+        try:
+            self.context.save_env_values({"ALOHAMINI_CAMERAS": value})
+        except Exception as exc:
+            self.ui.log_panel.append("ERROR", f"保存相机配置失败: {exc}")
+            return
+        self.ui.log_panel.append("INFO", f"已保存相机配置到 config.env: {value}")
+        self.ui.visual_status.setText(
+            f"已保存相机配置: {value}\n下一步: 停止 Host，再启动 Host；Host 重启后 GUI 才能看到新的相机列表。"
+        )
+
+    def _apply_camera_selection_if_safe(self, silent: bool = False) -> bool:
+        selected = self.ui.camera_panel.selected_cameras()
+        if not selected:
+            self.ui.log_panel.append("ERROR", "至少选择一个相机。")
+            return False
+        if self.camera_thread is not None or self.teleop_thread is not None or self.record_thread is not None:
+            self.ui.log_panel.append("WARN", "相机/遥操/采集运行中，先停止当前任务后再切换相机列表。")
+            return False
+        value = ",".join(selected)
+        self.context.config.env["ALOHAMINI_CAMERAS"] = value
+        os.environ["ALOHAMINI_CAMERAS"] = value
+        self.ui.camera_panel.set_sources(selected)
+        if not silent:
+            self.ui.log_panel.append("INFO", f"已应用相机启用列表: {value}")
+            self.ui.visual_status.setText(
+                f"相机启用列表: {value}\n如果树莓派 Host 已经运行，需要先停止 Host 再启动 Host，新的相机列表才会生效。"
+            )
+        return True
 
     @Slot()
     def stop_camera(self) -> None:
@@ -855,6 +1146,15 @@ class MainWindow(QMainWindow):
         super().keyReleaseEvent(event)
 
     def _handle_key_press(self, event) -> bool:
+        if self.record_worker is not None and not self._is_text_input_focused():
+            phase_key = self._phase_key_from_event(event)
+            if phase_key is not None:
+                phase_spec = self._phase_marker_spec_by_key(phase_key)
+                if phase_spec is not None:
+                    self._write_record_phase_marker(phase_spec)
+                    event.accept()
+                    return True
+
         key = self._teleop_key_from_event(event)
         if key is None:
             return False
@@ -992,6 +1292,14 @@ class MainWindow(QMainWindow):
         self.ui.log_panel.append("WARN", "已触发急停。")
 
     def closeEvent(self, event) -> None:
+        if self.record_worker is not None:
+            if not self._record_stop_requested:
+                self.ui.log_panel.append("WARN", "数据采集仍在运行；已请求安全停止。保存完成退出后再关闭窗口。")
+                self.stop_record()
+            else:
+                self.ui.log_panel.append("WARN", "数据采集正在安全停止；保存完成退出后再关闭窗口。")
+            event.ignore()
+            return
         self._start_teleop_after_camera = False
         self._start_record_after_camera = False
         if self.teleop_worker is not None:
@@ -1005,10 +1313,6 @@ class MainWindow(QMainWindow):
             self.stop_voice_control()
             if self.voice_thread is not None:
                 self.voice_thread.quit()
-        if self.record_worker is not None:
-            self.record_worker.cancel()
-            if self.record_thread is not None:
-                self.record_thread.quit()
         for thread, _worker in list(self.command_jobs):
             _worker.cancel()
             thread.quit()

@@ -73,6 +73,120 @@ class PreviewFrameWriter:
         self._last_write_t = now
 
 
+class PhaseMarkerRecorder:
+    def __init__(
+        self,
+        event_file: str | None,
+        output_file: str | None,
+        dataset_id: str,
+        task_description: str,
+        fps: int,
+    ):
+        self.event_file = Path(event_file) if event_file else None
+        self.output_file = Path(output_file) if output_file else None
+        self.dataset_id = dataset_id
+        self.task_description = task_description
+        self.fps = fps
+        self._event_offset = 0
+        self._pending_events: list[dict] = []
+        self._episode_markers: list[dict] = []
+        self._last_frame: tuple[int, int, float] | None = None
+        if self.output_file is not None:
+            self.output_file.parent.mkdir(parents=True, exist_ok=True)
+            self._append_jsonl(
+                {
+                    "type": "session_start",
+                    "dataset": self.dataset_id,
+                    "task": self.task_description,
+                    "fps": self.fps,
+                    "wall_time_ns": time.time_ns(),
+                }
+            )
+
+    @property
+    def enabled(self) -> bool:
+        return self.event_file is not None and self.output_file is not None
+
+    def on_frame(self, episode_index: int, frame_index: int, timestamp: float) -> None:
+        if not self.enabled:
+            return
+        self._last_frame = (episode_index, frame_index, timestamp)
+        self._load_new_events()
+        if not self._pending_events:
+            return
+        self._commit_pending_events(episode_index, frame_index, timestamp)
+
+    def _commit_pending_events(self, episode_index: int, frame_index: int, timestamp: float) -> None:
+        for event in self._pending_events:
+            self._episode_markers.append(
+                {
+                    "type": "phase_marker",
+                    "dataset": self.dataset_id,
+                    "episode_index": episode_index,
+                    "frame_index": frame_index,
+                    "timestamp": timestamp,
+                    "fps": self.fps,
+                    "name": event.get("name", ""),
+                    "label": event.get("label", ""),
+                    "key": event.get("key", ""),
+                    "task": self.task_description,
+                    "gui_wall_time_ns": event.get("wall_time_ns"),
+                    "record_wall_time_ns": time.time_ns(),
+                }
+            )
+        self._pending_events.clear()
+
+    def flush_episode(self) -> None:
+        if not self.enabled:
+            return
+        self._load_new_events()
+        if self._pending_events and self._last_frame is not None:
+            self._commit_pending_events(*self._last_frame)
+        for marker in self._episode_markers:
+            self._append_jsonl(marker)
+        if self._episode_markers:
+            print(f"Phase markers saved: {len(self._episode_markers)} marker(s).")
+        self._episode_markers.clear()
+        self._pending_events.clear()
+
+    def clear_episode(self) -> None:
+        self._load_new_events()
+        self._episode_markers.clear()
+        self._pending_events.clear()
+        self._last_frame = None
+
+    def _load_new_events(self) -> None:
+        if self.event_file is None:
+            return
+        try:
+            with self.event_file.open("r", encoding="utf-8") as f:
+                f.seek(self._event_offset)
+                chunk = f.read()
+                self._event_offset = f.tell()
+        except FileNotFoundError:
+            return
+        except Exception as exc:
+            print(f"Error reading phase marker file {self.event_file}: {exc}")
+            return
+        for line in chunk.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError as exc:
+                print(f"Invalid phase marker event ignored: {exc}")
+                continue
+            if event.get("type") == "phase_marker":
+                self._pending_events.append(event)
+
+    def _append_jsonl(self, payload: dict) -> None:
+        if self.output_file is None:
+            return
+        with self.output_file.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Record episodes with bi-arm teleoperation")
     parser.add_argument("--dataset", type=str, required=True,
@@ -122,6 +236,8 @@ def main():
     )
     parser.add_argument("--preview_dir", type=str, default=None, help="Optional directory for GUI preview JPEGs.")
     parser.add_argument("--preview_fps", type=int, default=8, help="GUI preview frame rate.")
+    parser.add_argument("--phase_marker_file", type=str, default=None, help="Optional GUI phase marker event jsonl.")
+    parser.add_argument("--phase_marker_output", type=str, default=None, help="Optional sidecar phase marker output jsonl.")
 
     args = parser.parse_args()
 
@@ -150,6 +266,13 @@ def main():
 
     teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
     preview_writer = PreviewFrameWriter(args.preview_dir, fps=args.preview_fps)
+    phase_markers = PhaseMarkerRecorder(
+        event_file=args.phase_marker_file,
+        output_file=args.phase_marker_output,
+        dataset_id=args.dataset,
+        task_description=args.task_description,
+        fps=args.fps,
+    )
 
     # === Dataset setup ===
     action_features = hw_to_dataset_features(robot.action_features, ACTION)
@@ -309,6 +432,7 @@ def main():
 
         log_say("Save episode before manual reset")
         dataset.save_episode()
+        phase_markers.flush_episode()
         recorded_episodes += 1
         manual_finish_wait.clear()
         return wait_for_gui_restart()
@@ -316,6 +440,7 @@ def main():
     def handle_manual_rerecord_wait() -> bool:
         log_say("Discard episode and wait for manual reset")
         dataset.clear_episode_buffer()
+        phase_markers.clear_episode()
         events["rerecord_episode"] = False
         manual_rerecord_wait.clear()
         return wait_for_gui_restart()
@@ -337,6 +462,7 @@ def main():
             robot_action_processor=robot_action_processor,
             robot_observation_processor=robot_observation_processor,
             preview_callback=preview_writer,
+            frame_callback=phase_markers.on_frame,
         )
 
         if manual_finish_wait.is_set():
@@ -383,9 +509,11 @@ def main():
             events["rerecord_episode"] = False
             events["exit_early"] = False
             dataset.clear_episode_buffer()
+            phase_markers.clear_episode()
             continue
 
         dataset.save_episode()
+        phase_markers.flush_episode()
         recorded_episodes += 1
 
     # === Clean up ===

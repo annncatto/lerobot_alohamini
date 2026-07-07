@@ -27,7 +27,6 @@
 
 ```bash
 alohamini_ops/init_customer_env.sh --pi-user pi5 --pi-host 192.168.0.24
-alohamini_ops/setup_env.sh
 alohamini_ops/start_gui.sh
 ```
 
@@ -41,6 +40,12 @@ GUI 使用 Qt，需要安装 `PyQt6` 或 `PySide6`：
 
 ```bash
 alohamini_ops/setup_env.sh
+```
+
+语音控制依赖较大，默认不安装。需要麦克风语音控制时再运行：
+
+```bash
+alohamini_ops/setup_env.sh --voice
 ```
 
 GUI 结构：
@@ -78,17 +83,23 @@ src/lerobot/robots/alohamini/config_lekiwi.py
 
 修改后需要同步到树莓派并重启 Host。
 
-Diagnostics 页包含舵机检查：
+Diagnostics 页包含现场排错入口：
 
-- `Check Local Leader Servos`: 检查本机 `/dev/am_arm_leader_left` 和 `/dev/am_arm_leader_right`。
-- `Check Pi Follower/Base Servos`: 通过 SSH 检查树莓派 `/dev/am_arm_follower_left`、`/dev/am_arm_follower_right`，其中左 bus 也包含底盘 8/9/10 和升降 11。
+- `运行状态检查`: 检查本机 Leader、树莓派 Follower、Host 进程和 Host 日志，并在总览页给出下一步建议。
+- `串口定位/舵机扫描`: 只读列出本机和树莓派的 `/dev/ttyACM*`、`/dev/ttyUSB*`、`/dev/serial/by-id/*`、`/dev/am_arm_*`，并扫描每个候选端口上的舵机 ID。
+- `检查升降轴`: 单独检查升降轴方向、反馈和运动。
+- `查看 Host 日志` / `查看本机遥操日志`: 查看最近日志。
 
 对应命令行脚本也可单独运行：
 
 ```bash
 alohamini_ops/check_local_servos.sh
 alohamini_ops/check_pi_servos.sh
+alohamini_ops/debug_serial_ports.sh
+alohamini_ops/check_lift_axis.sh
 ```
+
+串口调试脚本不会自动修改 udev 规则，也不会写系统文件。如果发现 `/dev/am_arm_*` 映射错误，按输出中的 by-id、真实路径和舵机 ID 分布人工修正 udev 或重新插线确认。
 
 GUI 遥操支持：
 
