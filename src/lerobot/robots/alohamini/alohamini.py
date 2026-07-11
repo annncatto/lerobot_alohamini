@@ -180,6 +180,9 @@ class AlohaMini(Robot):
         self._overcurrent_trip_n = 20
         self._last_currents_log_t = 0.0
         self._gripper_current_limit_ma = 150.0
+        self._gripper_current_hysteresis_ma = 5.0
+        self._gripper_retreat_step = 2.0
+        self._gripper_relief_direction: dict[str, float] = {}
         self._last_gripper_limit_log_t = 0.0
 
 
@@ -697,7 +700,7 @@ class AlohaMini(Robot):
         return {**left_pos, **right_pos, **base_goal_vel, **lift_sent}
 
     def _limit_gripper_goal_by_current(self, bus, goal_pos: dict[str, float]) -> dict[str, float]:
-        """Stop driving a gripper harder once its measured current exceeds the force limit."""
+        """Back off a gripper until measured current falls back near the force limit."""
         gripper_goal_keys = [
             key for key in goal_pos if key.endswith("_gripper.pos") and key.replace(".pos", "") in bus.motors
         ]
@@ -714,19 +717,38 @@ class AlohaMini(Robot):
 
         limited_goal_pos = dict(goal_pos)
         now = time.monotonic()
+        release_current_ma = max(0.0, self._gripper_current_limit_ma - self._gripper_current_hysteresis_ma)
         for goal_key in gripper_goal_keys:
             motor = goal_key.replace(".pos", "")
+            goal = float(limited_goal_pos[goal_key])
+            present = float(present_pos[motor])
             current_ma = abs(float(currents_raw.get(motor, 0.0)) * 6.5)
-            if current_ma < self._gripper_current_limit_ma:
+
+            if current_ma >= self._gripper_current_limit_ma:
+                command_delta = goal - present
+                if abs(command_delta) > 1e-6:
+                    self._gripper_relief_direction[motor] = -1.0 if command_delta > 0 else 1.0
+
+            relief_direction = self._gripper_relief_direction.get(motor)
+            if relief_direction is None:
                 continue
 
-            limited_goal_pos[goal_key] = present_pos[motor]
+            if current_ma <= release_current_ma:
+                self._gripper_relief_direction.pop(motor, None)
+                limited_goal_pos[goal_key] = present
+                continue
+
+            limited_goal_pos[goal_key] = min(
+                100.0,
+                max(0.0, present + relief_direction * self._gripper_retreat_step),
+            )
             if now - self._last_gripper_limit_log_t >= 1.0:
                 logger.warning(
-                    "Gripper current limit: %s %.1f mA >= %.1f mA; holding present position.",
+                    "Gripper current limit: %s %.1f mA >= %.1f mA; backing off to %.2f.",
                     motor,
                     current_ma,
                     self._gripper_current_limit_ma,
+                    limited_goal_pos[goal_key],
                 )
                 self._last_gripper_limit_log_t = now
 
