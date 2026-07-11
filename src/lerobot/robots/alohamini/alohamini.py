@@ -179,6 +179,8 @@ class AlohaMini(Robot):
         self._overcurrent_count: dict[str, int] = {}
         self._overcurrent_trip_n = 20
         self._last_currents_log_t = 0.0
+        self._gripper_current_limit_ma = 150.0
+        self._last_gripper_limit_log_t = 0.0
 
 
     @property
@@ -672,6 +674,9 @@ class AlohaMini(Robot):
             gp_right = {k: (v, present_right[k.replace(".pos", "")]) for k, v in right_pos.items()}
             right_pos = ensure_safe_goal_position(gp_right, self.config.max_relative_target)
 
+        left_pos = self._limit_gripper_goal_by_current(self.left_bus, left_pos)
+        if self.right_bus and right_pos:
+            right_pos = self._limit_gripper_goal_by_current(self.right_bus, right_pos)
 
         # Send goal position to the actuators
         # arm_goal_pos_raw = {k.replace(".pos", ""): v for k, v in arm_goal_pos.items()}
@@ -690,6 +695,42 @@ class AlohaMini(Robot):
 
         lift_sent = {k: v for k, v in action.items() if k.startswith("lift_axis.")}
         return {**left_pos, **right_pos, **base_goal_vel, **lift_sent}
+
+    def _limit_gripper_goal_by_current(self, bus, goal_pos: dict[str, float]) -> dict[str, float]:
+        """Stop driving a gripper harder once its measured current exceeds the force limit."""
+        gripper_goal_keys = [
+            key for key in goal_pos if key.endswith("_gripper.pos") and key.replace(".pos", "") in bus.motors
+        ]
+        if not gripper_goal_keys:
+            return goal_pos
+
+        gripper_motors = [key.replace(".pos", "") for key in gripper_goal_keys]
+        try:
+            currents_raw = bus.sync_read("Present_Current", gripper_motors)
+            present_pos = bus.sync_read("Present_Position", gripper_motors)
+        except Exception as e:
+            logger.warning("Failed to read gripper current/position for force limiting: %s", e)
+            return goal_pos
+
+        limited_goal_pos = dict(goal_pos)
+        now = time.monotonic()
+        for goal_key in gripper_goal_keys:
+            motor = goal_key.replace(".pos", "")
+            current_ma = abs(float(currents_raw.get(motor, 0.0)) * 6.5)
+            if current_ma < self._gripper_current_limit_ma:
+                continue
+
+            limited_goal_pos[goal_key] = present_pos[motor]
+            if now - self._last_gripper_limit_log_t >= 1.0:
+                logger.warning(
+                    "Gripper current limit: %s %.1f mA >= %.1f mA; holding present position.",
+                    motor,
+                    current_ma,
+                    self._gripper_current_limit_ma,
+                )
+                self._last_gripper_limit_log_t = now
+
+        return limited_goal_pos
 
 
     def stop_base(self):
