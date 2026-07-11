@@ -72,7 +72,7 @@ def build_observation_multipart(observation: dict, camera_keys) -> list[bytes]:
         frame = observation.get(cam_key)
         if frame is None:
             continue
-        ret, buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+        ret, buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
         if not ret:
             logging.warning("Failed to JPEG encode camera frame %s.", cam_key)
             continue
