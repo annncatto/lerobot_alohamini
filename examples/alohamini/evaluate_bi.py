@@ -21,27 +21,60 @@ from lerobot.utils.utils import log_say
 from lerobot.utils.visualization_utils import init_rerun
 
 
+def parse_bool(value: str | bool) -> bool:
+    if isinstance(value, bool):
+        return value
+
+    value = value.lower()
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    raise argparse.ArgumentTypeError("Expected true or false.")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Evaluate AlohaMini robot with a pretrained policy")
-    parser.add_argument("--num_episodes", type=int, default=2)
+    parser.add_argument("--eval.n_episodes", "--num_episodes", dest="num_episodes", type=int, default=2)
     parser.add_argument("--fps", type=int, default=30)
-    parser.add_argument("--episode_time", type=int, default=60)
-    parser.add_argument("--task_description", type=str, default="robot task")
-    parser.add_argument("--hf_model_id", type=str, required=True)
-    parser.add_argument("--hf_dataset_id", type=str, required=True)
-    parser.add_argument("--remote_ip", type=str, default="127.0.0.1")
-    parser.add_argument("--robot_id", type=str, default="my_alohamini")
-    parser.add_argument("--robot_model", type=str, default="alohamini1",
-                        choices=["alohamini1", "alohamini2", "alohamini2pro"],
-                        help="Must match the robot_model on the Pi host side")
+    parser.add_argument("--eval.episode_time_s", "--episode_time", dest="episode_time", type=int, default=60)
+    parser.add_argument(
+        "--dataset.single_task",
+        "--task_description",
+        dest="task_description",
+        type=str,
+        default="robot task",
+    )
+    parser.add_argument("--policy.path", "--hf_model_id", dest="policy_path", type=str, required=True)
+    parser.add_argument("--dataset.repo_id", "--hf_dataset_id", dest="dataset_repo_id", type=str, required=True)
+    parser.add_argument(
+        "--dataset.push_to_hub",
+        dest="push_to_hub",
+        type=parse_bool,
+        nargs="?",
+        const=True,
+        default=True,
+        help="Whether to upload the evaluation dataset to Hugging Face Hub.",
+    )
+    parser.add_argument("--robot.remote_ip", "--remote_ip", dest="remote_ip", type=str, default="127.0.0.1")
+    parser.add_argument("--robot.id", "--robot_id", dest="robot_id", type=str, default="my_alohamini")
+    parser.add_argument(
+        "--robot.robot_model",
+        "--robot_model",
+        dest="robot_model",
+        type=str,
+        default="alohamini1",
+        choices=["alohamini1", "alohamini2", "alohamini2pro"],
+        help="Must match the robot_model on the Pi host side",
+    )
     args = parser.parse_args()
 
     device = str(auto_select_torch_device())
 
     # === Policy ===
-    policy_cfg = PreTrainedConfig.from_pretrained(args.hf_model_id)
-    policy_cfg.pretrained_path = args.hf_model_id
-    policy = get_policy_class(policy_cfg.type).from_pretrained(args.hf_model_id, config=policy_cfg)
+    policy_cfg = PreTrainedConfig.from_pretrained(args.policy_path)
+    policy_cfg.pretrained_path = args.policy_path
+    policy = get_policy_class(policy_cfg.type).from_pretrained(args.policy_path, config=policy_cfg)
     policy = policy.to(device)
     policy.eval()
 
@@ -76,7 +109,7 @@ def main():
 
     # === Dataset ===
     dataset = LeRobotDataset.create(
-        repo_id=args.hf_dataset_id,
+        repo_id=args.dataset_repo_id,
         fps=args.fps,
         features=dataset_features,
         robot_type=robot.name,
@@ -144,7 +177,8 @@ def main():
     engine.stop()
     robot.disconnect()
     dataset.finalize()
-    dataset.push_to_hub()
+    if args.push_to_hub:
+        dataset.push_to_hub()
 
 
 if __name__ == "__main__":

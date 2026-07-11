@@ -15,17 +15,43 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--no_robot", action="store_true", help="Do not connect robot, only print actions")
 parser.add_argument("--no_leader", action="store_true", help="Do not connect leader arm, only perform keyboard-controlled actions.")
 parser.add_argument("--fps", type=int, default=30, help="Main loop frequency (frames per second)")
-parser.add_argument("--remote_ip", type=str, default="127.0.0.1", help="AlohaMini host IP address")
 parser.add_argument(
+    "--robot.remote_ip",
+    "--remote_ip",
+    dest="remote_ip",
+    type=str,
+    default="127.0.0.1",
+    help="AlohaMini host IP address",
+)
+parser.add_argument(
+    "--robot.id",
+    "--robot_id",
+    dest="robot_id",
+    type=str,
+    default="my_alohamini",
+    help="Robot ID",
+)
+parser.add_argument(
+    "--robot.robot_model",
     "--robot_model",
+    dest="robot_model",
     type=str,
     default="alohamini1",
     choices=["alohamini1", "alohamini2", "alohamini2pro"],
     help="AlohaMini model. Must match the --robot_model used on the Pi host side.",
 )
-parser.add_argument("--leader_id", type=str, default="so101_leader_bi", help="Leader arm device ID")
 parser.add_argument(
+    "--teleop.id",
+    "--leader_id",
+    dest="leader_id",
+    type=str,
+    default="so101_leader_bi",
+    help="Leader arm device ID",
+)
+parser.add_argument(
+    "--teleop.arm_profile",
     "--arm_profile",
+    dest="arm_profile",
     type=str,
     default="so-arm-5dof",
     choices=["so-arm-5dof", "am-leader-6dof"],
@@ -47,7 +73,7 @@ if NO_LEADER:
 # Create configs
 robot_config = AlohaMiniClientConfig(
     remote_ip=args.remote_ip,
-    id="my_alohamini",
+    id=args.robot_id,
     robot_model=args.robot_model,
 )
 bi_cfg = BiSOLeaderConfig(

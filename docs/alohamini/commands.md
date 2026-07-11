@@ -190,10 +190,10 @@ AlohaMini 1 with SO-ARM leader:
 
 ```bash
 python examples/alohamini/teleoperate_bi.py \
-  --remote_ip <Pi_IP> \
-  --robot_model alohamini1 \
-  --leader_id so101_leader_bi \
-  --arm_profile so-arm-5dof \
+  --robot.remote_ip <Pi_IP> \
+  --robot.robot_model alohamini1 \
+  --teleop.id so101_leader_bi \
+  --teleop.arm_profile so-arm-5dof \
   --fps 30
 ```
 
@@ -201,10 +201,10 @@ AlohaMini 2 / 2 Pro with AM-ARM leader:
 
 ```bash
 python examples/alohamini/teleoperate_bi.py \
-  --remote_ip <Pi_IP> \
-  --robot_model alohamini2 \
-  --leader_id am_leader_bi \
-  --arm_profile am-leader-6dof \
+  --robot.remote_ip <Pi_IP> \
+  --robot.robot_model alohamini2 \
+  --teleop.id am_leader_bi \
+  --teleop.arm_profile am-leader-6dof \
   --fps 30
 ```
 
@@ -212,48 +212,49 @@ Lower FPS for network or CPU debugging:
 
 ```bash
 python examples/alohamini/teleoperate_bi.py \
-  --remote_ip <Pi_IP> \
-  --robot_model alohamini2 \
-  --leader_id am_leader_bi \
-  --arm_profile am-leader-6dof \
+  --robot.remote_ip <Pi_IP> \
+  --robot.robot_model alohamini2 \
+  --teleop.id am_leader_bi \
+  --teleop.arm_profile am-leader-6dof \
   --fps 10
 ```
 
 ## Recording
 
 `record_bi.py` prints the local dataset path after setup and finalization, and uploads to Hugging Face Hub by default.
-Add `--push_to_hub false` if you only want to keep the dataset locally.
+Add `--dataset.push_to_hub=false` if you only want to keep the dataset locally.
+Add `--dataset.root /path/to/dataset` when you want to store or resume from a specific local directory.
 
 Create a dataset for AlohaMini 1:
 
 ```bash
 python examples/alohamini/record_bi.py \
-  --dataset $HF_USER/so100_bi_test \
-  --num_episodes 1 \
-  --fps 30 \
-  --episode_time 45 \
-  --reset_time 8 \
-  --task_description "pickup1" \
-  --remote_ip <Pi_IP> \
-  --robot_model alohamini1 \
-  --leader_id so101_leader_bi \
-  --arm_profile so-arm-5dof
+  --dataset.repo_id $HF_USER/so100_bi_test \
+  --dataset.num_episodes 1 \
+  --dataset.fps 30 \
+  --dataset.episode_time_s 45 \
+  --dataset.reset_time_s 8 \
+  --dataset.single_task "pickup1" \
+  --robot.remote_ip <Pi_IP> \
+  --robot.robot_model alohamini1 \
+  --teleop.id so101_leader_bi \
+  --teleop.arm_profile so-arm-5dof
 ```
 
 Resume a dataset for AlohaMini 1:
 
 ```bash
 python examples/alohamini/record_bi.py \
-  --dataset $HF_USER/so100_bi_test \
-  --num_episodes 1 \
-  --fps 30 \
-  --episode_time 45 \
-  --reset_time 8 \
-  --task_description "pickup1" \
-  --remote_ip <Pi_IP> \
-  --robot_model alohamini1 \
-  --leader_id so101_leader_bi \
-  --arm_profile so-arm-5dof \
+  --dataset.repo_id $HF_USER/so100_bi_test \
+  --dataset.num_episodes 1 \
+  --dataset.fps 30 \
+  --dataset.episode_time_s 45 \
+  --dataset.reset_time_s 8 \
+  --dataset.single_task "pickup1" \
+  --robot.remote_ip <Pi_IP> \
+  --robot.robot_model alohamini1 \
+  --teleop.id so101_leader_bi \
+  --teleop.arm_profile so-arm-5dof \
   --resume
 ```
 
@@ -261,32 +262,32 @@ Create a dataset for AlohaMini 2 / 2 Pro:
 
 ```bash
 python examples/alohamini/record_bi.py \
-  --dataset $HF_USER/am2_bi_test \
-  --num_episodes 1 \
-  --fps 30 \
-  --episode_time 45 \
-  --reset_time 8 \
-  --task_description "pickup1" \
-  --remote_ip <Pi_IP> \
-  --robot_model alohamini2 \
-  --leader_id am_leader_bi \
-  --arm_profile am-leader-6dof
+  --dataset.repo_id $HF_USER/am2_bi_test \
+  --dataset.num_episodes 1 \
+  --dataset.fps 30 \
+  --dataset.episode_time_s 45 \
+  --dataset.reset_time_s 8 \
+  --dataset.single_task "pickup1" \
+  --robot.remote_ip <Pi_IP> \
+  --robot.robot_model alohamini2 \
+  --teleop.id am_leader_bi \
+  --teleop.arm_profile am-leader-6dof
 ```
 
 Resume a dataset for AlohaMini 2 / 2 Pro:
 
 ```bash
 python examples/alohamini/record_bi.py \
-  --dataset $HF_USER/am2_bi_test \
-  --num_episodes 1 \
-  --fps 30 \
-  --episode_time 45 \
-  --reset_time 8 \
-  --task_description "pickup1" \
-  --remote_ip <Pi_IP> \
-  --robot_model alohamini2 \
-  --leader_id am_leader_bi \
-  --arm_profile am-leader-6dof \
+  --dataset.repo_id $HF_USER/am2_bi_test \
+  --dataset.num_episodes 1 \
+  --dataset.fps 30 \
+  --dataset.episode_time_s 45 \
+  --dataset.reset_time_s 8 \
+  --dataset.single_task "pickup1" \
+  --robot.remote_ip <Pi_IP> \
+  --robot.robot_model alohamini2 \
+  --teleop.id am_leader_bi \
+  --teleop.arm_profile am-leader-6dof \
   --resume
 ```
 
@@ -294,16 +295,16 @@ Recording smoke test:
 
 ```bash
 python examples/alohamini/record_bi.py \
-  --dataset $HF_USER/alohamini_smoke_test \
-  --num_episodes 1 \
-  --fps 10 \
-  --episode_time 10 \
-  --reset_time 3 \
-  --task_description "smoke test" \
-  --remote_ip <Pi_IP> \
-  --robot_model alohamini2 \
-  --leader_id am_leader_bi \
-  --arm_profile am-leader-6dof
+  --dataset.repo_id $HF_USER/alohamini_smoke_test \
+  --dataset.num_episodes 1 \
+  --dataset.fps 10 \
+  --dataset.episode_time_s 10 \
+  --dataset.reset_time_s 3 \
+  --dataset.single_task "smoke test" \
+  --robot.remote_ip <Pi_IP> \
+  --robot.robot_model alohamini2 \
+  --teleop.id am_leader_bi \
+  --teleop.arm_profile am-leader-6dof
 ```
 
 ## Replay and Visualization
@@ -312,11 +313,13 @@ Replay one episode:
 
 ```bash
 python examples/alohamini/replay_bi.py \
-  --dataset $HF_USER/am2_bi_test \
-  --episode 0 \
-  --remote_ip <Pi_IP> \
-  --robot_model alohamini2
+  --dataset.repo_id $HF_USER/am2_bi_test \
+  --dataset.episode 0 \
+  --robot.remote_ip <Pi_IP> \
+  --robot.robot_model alohamini2
 ```
+
+If the dataset is not under `$HF_LEROBOT_HOME/$HF_USER/am2_bi_test`, add `--dataset.root /path/to/am2_bi_test`.
 
 Visualize a dataset episode:
 
@@ -363,15 +366,16 @@ Evaluate a local checkpoint:
 
 ```bash
 python examples/alohamini/evaluate_bi.py \
-  --num_episodes 3 \
+  --eval.n_episodes 3 \
   --fps 20 \
-  --episode_time 45 \
-  --task_description "Pick and place task" \
-  --hf_model_id outputs/train/act_am2_bi_test/checkpoints/020000/pretrained_model \
-  --hf_dataset_id $HF_USER/eval_act_am2_bi_test \
-  --remote_ip <Pi_IP> \
-  --robot_id my_alohamini \
-  --robot_model alohamini2
+  --eval.episode_time_s 45 \
+  --dataset.single_task "Pick and place task" \
+  --policy.path outputs/train/act_am2_bi_test/checkpoints/020000/pretrained_model \
+  --dataset.repo_id $HF_USER/eval_act_am2_bi_test \
+  --dataset.push_to_hub=true \
+  --robot.remote_ip <Pi_IP> \
+  --robot.id my_alohamini \
+  --robot.robot_model alohamini2
 ```
 
 ## Performance Debugging
@@ -423,16 +427,16 @@ Run a lower-load recording test:
 
 ```bash
 python examples/alohamini/record_bi.py \
-  --dataset $HF_USER/perf_debug_low_fps \
-  --num_episodes 1 \
-  --fps 10 \
-  --episode_time 10 \
-  --reset_time 3 \
-  --task_description "perf debug" \
-  --remote_ip <Pi_IP> \
-  --robot_model alohamini2 \
-  --leader_id am_leader_bi \
-  --arm_profile am-leader-6dof
+  --dataset.repo_id $HF_USER/perf_debug_low_fps \
+  --dataset.num_episodes 1 \
+  --dataset.fps 10 \
+  --dataset.episode_time_s 10 \
+  --dataset.reset_time_s 3 \
+  --dataset.single_task "perf debug" \
+  --robot.remote_ip <Pi_IP> \
+  --robot.robot_model alohamini2 \
+  --teleop.id am_leader_bi \
+  --teleop.arm_profile am-leader-6dof
 ```
 
 ## Hardware Debug Scripts

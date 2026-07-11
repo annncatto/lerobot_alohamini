@@ -95,20 +95,20 @@ SO-ARM leader (5-DoF):
 
 ```bash
 python examples/alohamini/teleoperate_bi.py \
-  --remote_ip <Pi_IP> \
-  --robot_model alohamini1 \
-  --leader_id so101_leader_bi \
-  --arm_profile so-arm-5dof
+  --robot.remote_ip <Pi_IP> \
+  --robot.robot_model alohamini1 \
+  --teleop.id so101_leader_bi \
+  --teleop.arm_profile so-arm-5dof
 ```
 
 AM-ARM leader (6-DoF):
 
 ```bash
 python examples/alohamini/teleoperate_bi.py \
-  --remote_ip <Pi_IP> \
-  --robot_model alohamini2 \
-  --leader_id am_leader_bi \
-  --arm_profile am-leader-6dof
+  --robot.remote_ip <Pi_IP> \
+  --robot.robot_model alohamini2 \
+  --teleop.id am_leader_bi \
+  --teleop.arm_profile am-leader-6dof
 ```
 
 > Power-cycle both leader and follower arms after calibration for changes to take effect.
@@ -127,10 +127,10 @@ python -m lerobot.robots.alohamini.alohamini_host --robot_model alohamini2pro
 
 # PC — run the client for your leader arm:
 python examples/alohamini/teleoperate_bi.py \
-  --remote_ip <Pi_IP> --robot_model alohamini1 --leader_id so101_leader_bi --arm_profile so-arm-5dof
+  --robot.remote_ip <Pi_IP> --robot.robot_model alohamini1 --teleop.id so101_leader_bi --teleop.arm_profile so-arm-5dof
 
 python examples/alohamini/teleoperate_bi.py \
-  --remote_ip <Pi_IP> --robot_model alohamini2 --leader_id am_leader_bi --arm_profile am-leader-6dof
+  --robot.remote_ip <Pi_IP> --robot.robot_model alohamini2 --teleop.id am_leader_bi --teleop.arm_profile am-leader-6dof
 ```
 
 ---
@@ -138,10 +138,11 @@ python examples/alohamini/teleoperate_bi.py \
 ## 6. Dataset Recording
 
 > Make sure the Pi host is already running (§5) before recording.  
-> `--arm_profile` here refers to your **leader arm** hardware, not the follower robot.  
-> `--robot_model` must match the model running on the Pi host.  
+> `--teleop.arm_profile` here refers to your **leader arm** hardware, not the follower robot.  
+> `--robot.robot_model` must match the model running on the Pi host.  
 > Replace `<Pi_IP>` with your Raspberry Pi's IP address.
-> `record_bi.py` prints the local dataset path and uploads to Hugging Face Hub by default. Add `--push_to_hub false` to keep the dataset local only.
+> `record_bi.py` prints the local dataset path and uploads to Hugging Face Hub by default. Add `--dataset.push_to_hub=false` to keep the dataset local only.
+> Add `--dataset.root /path/to/dataset` when you want to store or resume from a specific local directory.
 
 ### AlohaMini 1 — SO-ARM leader (5-DoF)
 
@@ -149,32 +150,32 @@ Create new dataset:
 
 ```bash
 python examples/alohamini/record_bi.py \
-  --dataset $HF_USER/so100_bi_test \
-  --num_episodes 1 \
-  --fps 30 \
-  --episode_time 45 \
-  --reset_time 8 \
-  --task_description "pickup1" \
-  --remote_ip <Pi_IP> \
-  --robot_model alohamini1 \
-  --leader_id so101_leader_bi \
-  --arm_profile so-arm-5dof
+  --dataset.repo_id $HF_USER/so100_bi_test \
+  --dataset.num_episodes 1 \
+  --dataset.fps 30 \
+  --dataset.episode_time_s 45 \
+  --dataset.reset_time_s 8 \
+  --dataset.single_task "pickup1" \
+  --robot.remote_ip <Pi_IP> \
+  --robot.robot_model alohamini1 \
+  --teleop.id so101_leader_bi \
+  --teleop.arm_profile so-arm-5dof
 ```
 
 Resume existing dataset (add `--resume`):
 
 ```bash
 python examples/alohamini/record_bi.py \
-  --dataset $HF_USER/so100_bi_test \
-  --num_episodes 1 \
-  --fps 30 \
-  --episode_time 45 \
-  --reset_time 8 \
-  --task_description "pickup1" \
-  --remote_ip <Pi_IP> \
-  --robot_model alohamini1 \
-  --leader_id so101_leader_bi \
-  --arm_profile so-arm-5dof \
+  --dataset.repo_id $HF_USER/so100_bi_test \
+  --dataset.num_episodes 1 \
+  --dataset.fps 30 \
+  --dataset.episode_time_s 45 \
+  --dataset.reset_time_s 8 \
+  --dataset.single_task "pickup1" \
+  --robot.remote_ip <Pi_IP> \
+  --robot.robot_model alohamini1 \
+  --teleop.id so101_leader_bi \
+  --teleop.arm_profile so-arm-5dof \
   --resume
 ```
 
@@ -184,32 +185,32 @@ Create new dataset:
 
 ```bash
 python examples/alohamini/record_bi.py \
-  --dataset $HF_USER/am2_bi_test \
-  --num_episodes 1 \
-  --fps 30 \
-  --episode_time 45 \
-  --reset_time 8 \
-  --task_description "pickup1" \
-  --remote_ip <Pi_IP> \
-  --robot_model alohamini2 \
-  --leader_id am_leader_bi \
-  --arm_profile am-leader-6dof
+  --dataset.repo_id $HF_USER/am2_bi_test \
+  --dataset.num_episodes 1 \
+  --dataset.fps 30 \
+  --dataset.episode_time_s 45 \
+  --dataset.reset_time_s 8 \
+  --dataset.single_task "pickup1" \
+  --robot.remote_ip <Pi_IP> \
+  --robot.robot_model alohamini2 \
+  --teleop.id am_leader_bi \
+  --teleop.arm_profile am-leader-6dof
 ```
 
 Resume existing dataset (add `--resume`):
 
 ```bash
 python examples/alohamini/record_bi.py \
-  --dataset $HF_USER/am2_bi_test \
-  --num_episodes 1 \
-  --fps 30 \
-  --episode_time 45 \
-  --reset_time 8 \
-  --task_description "pickup1" \
-  --remote_ip <Pi_IP> \
-  --robot_model alohamini2 \
-  --leader_id am_leader_bi \
-  --arm_profile am-leader-6dof \
+  --dataset.repo_id $HF_USER/am2_bi_test \
+  --dataset.num_episodes 1 \
+  --dataset.fps 30 \
+  --dataset.episode_time_s 45 \
+  --dataset.reset_time_s 8 \
+  --dataset.single_task "pickup1" \
+  --robot.remote_ip <Pi_IP> \
+  --robot.robot_model alohamini2 \
+  --teleop.id am_leader_bi \
+  --teleop.arm_profile am-leader-6dof \
   --resume
 ```
 
@@ -219,11 +220,13 @@ python examples/alohamini/record_bi.py \
 
 ```bash
 python examples/alohamini/replay_bi.py \
-  --dataset $HF_USER/am2_bi_test \
-  --episode 0 \
-  --remote_ip <Pi_IP> \
-  --robot_model alohamini2
+  --dataset.repo_id $HF_USER/am2_bi_test \
+  --dataset.episode 0 \
+  --robot.remote_ip <Pi_IP> \
+  --robot.robot_model alohamini2
 ```
+
+If the dataset is not under `$HF_LEROBOT_HOME/$HF_USER/am2_bi_test`, add `--dataset.root /path/to/am2_bi_test`.
 
 ---
 
@@ -264,22 +267,23 @@ Use any cloud GPU provider (e.g. AutoDL, Lambda Labs, Vast.ai). Set up the envir
 
 Make sure the Pi host is already running (§5), then run inference from the PC.
 
-> `--robot_model` / `--robot.robot_model` must match the model running on the Pi host:  
+> `--robot.robot_model` must match the model running on the Pi host:  
 > `alohamini1` (SO-ARM 5-DoF, 16-dim state) · `alohamini2` / `alohamini2pro` (AM-ARM 6-DoF, 18-dim state)
 
 ### `evaluate_bi.py` (custom script, N episodes, records to Hub)
 
 ```bash
 python examples/alohamini/evaluate_bi.py \
-  --num_episodes 3 \
+  --eval.n_episodes 3 \
   --fps 20 \
-  --episode_time 45 \
-  --task_description "Pick and place task" \
-  --hf_model_id outputs/train/act_your_dataset1/checkpoints/020000/pretrained_model \
-  --hf_dataset_id $HF_USER/eval_act_policy \
-  --remote_ip <Pi_IP> \
-  --robot_id my_alohamini \
-  --robot_model alohamini2
+  --eval.episode_time_s 45 \
+  --dataset.single_task "Pick and place task" \
+  --policy.path outputs/train/act_your_dataset1/checkpoints/020000/pretrained_model \
+  --dataset.repo_id $HF_USER/eval_act_policy \
+  --dataset.push_to_hub=true \
+  --robot.remote_ip <Pi_IP> \
+  --robot.id my_alohamini \
+  --robot.robot_model alohamini2
 ```
 
 ---

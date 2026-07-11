@@ -1,22 +1,20 @@
 #!/usr/bin/env python3
 
-from email import parser
+import argparse
+from pathlib import Path
+
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.utils.constants import HF_LEROBOT_HOME
-from lerobot.utils.feature_utils import hw_to_dataset_features
 from lerobot.processor import make_default_processors
 from lerobot.robots.alohamini import AlohaMiniClient, AlohaMiniClientConfig
 from lerobot.scripts.lerobot_record import record_loop
-from lerobot.teleoperators.keyboard import KeyboardTeleop, KeyboardTeleopConfig
 from lerobot.teleoperators.bi_so_leader import BiSOLeader, BiSOLeaderConfig
+from lerobot.teleoperators.keyboard import KeyboardTeleop, KeyboardTeleopConfig
 from lerobot.teleoperators.so_leader import SOLeaderConfig
-from lerobot.utils.constants import ACTION, OBS_STR
-from lerobot.common.control_utils import init_keyboard_listener
+from lerobot.utils.constants import ACTION, HF_LEROBOT_HOME, OBS_STR
+from lerobot.utils.feature_utils import hw_to_dataset_features
+from lerobot.utils.keyboard_input import init_keyboard_listener
 from lerobot.utils.utils import log_say
 from lerobot.utils.visualization_utils import init_rerun
-
-from datetime import datetime
-import argparse
 
 
 def parse_bool(value: str | bool) -> bool:
@@ -33,25 +31,49 @@ def parse_bool(value: str | bool) -> bool:
 
 def main():
     parser = argparse.ArgumentParser(description="Record episodes with bi-arm teleoperation")
-    parser.add_argument("--dataset", type=str, required=True,
+    parser.add_argument("--dataset.repo_id", "--dataset", dest="dataset_repo_id", type=str, required=True,
                     help="Dataset repo_id, e.g. liyitenga/record_20250914225057")
-    parser.add_argument("--num_episodes", type=int, default=1, help="Number of episodes to record")
-    parser.add_argument("--fps", type=int, default=30, help="Frames per second")
-    parser.add_argument("--episode_time", type=int, default=60, help="Duration of each episode (seconds)")
-    parser.add_argument("--reset_time", type=int, default=10, help="Reset duration between episodes (seconds)")
-    parser.add_argument("--task_description", type=str, default="My task description4", help="Task description")
-    parser.add_argument("--remote_ip", type=str, default="127.0.0.1", help="Robot host IP")
-    parser.add_argument("--robot_id", type=str, default="my_alohamini", help="Robot ID")
+    parser.add_argument("--dataset.root", "--root", dest="dataset_root", type=str, default=None,
+                    help="Local dataset root. Defaults to $HF_LEROBOT_HOME/<dataset.repo_id>.")
+    parser.add_argument("--dataset.num_episodes", "--num_episodes", dest="num_episodes",
+                        type=int, default=1, help="Number of episodes to record")
+    parser.add_argument("--dataset.fps", "--fps", dest="fps", type=int, default=30, help="Frames per second")
+    parser.add_argument("--dataset.episode_time_s", "--episode_time", dest="episode_time",
+                        type=int, default=60, help="Duration of each episode (seconds)")
+    parser.add_argument("--dataset.reset_time_s", "--reset_time", dest="reset_time",
+                        type=int, default=10, help="Reset duration between episodes (seconds)")
+    parser.add_argument("--dataset.single_task", "--task_description", dest="task_description",
+                        type=str, default="My task description4", help="Task description")
     parser.add_argument(
+        "--robot.remote_ip",
+        "--remote_ip",
+        dest="remote_ip",
+        type=str,
+        default="127.0.0.1",
+        help="Robot host IP",
+    )
+    parser.add_argument("--robot.id", "--robot_id", dest="robot_id", type=str, default="my_alohamini", help="Robot ID")
+    parser.add_argument(
+        "--robot.robot_model",
         "--robot_model",
+        dest="robot_model",
         type=str,
         default="alohamini1",
         choices=["alohamini1", "alohamini2", "alohamini2pro"],
         help="AlohaMini model. Must match the --robot_model used on the Pi host side.",
     )
-    parser.add_argument("--leader_id", type=str, default="so101_leader_bi", help="Leader arm device ID")
     parser.add_argument(
+        "--teleop.id",
+        "--leader_id",
+        dest="leader_id",
+        type=str,
+        default="so101_leader_bi",
+        help="Leader arm device ID",
+    )
+    parser.add_argument(
+        "--teleop.arm_profile",
         "--arm_profile",
+        dest="arm_profile",
         type=str,
         default="so-arm-5dof",
         choices=["so-arm-5dof", "am-leader-6dof"],
@@ -59,12 +81,14 @@ def main():
     )
     parser.add_argument("--resume", action="store_true", help="Resume recording on existing dataset")
     parser.add_argument(
+        "--dataset.push_to_hub",
         "--push_to_hub",
+        dest="push_to_hub",
         type=parse_bool,
         nargs="?",
         const=True,
         default=True,
-        help="Whether to upload the dataset to Hugging Face Hub after recording. Use '--push_to_hub false' to skip upload.",
+        help="Whether to upload the dataset to Hugging Face Hub after recording.",
     )
 
     args = parser.parse_args()
@@ -98,17 +122,19 @@ def main():
     action_features = hw_to_dataset_features(robot.action_features, ACTION)
     obs_features = hw_to_dataset_features(robot.observation_features, OBS_STR)
     dataset_features = {**action_features, **obs_features}
+    dataset_root = Path(args.dataset_root) if args.dataset_root else HF_LEROBOT_HOME / args.dataset_repo_id
 
     if args.resume:
-        print("Resuming existing dataset:", args.dataset)
+        print("Resuming existing dataset:", args.dataset_repo_id)
         dataset = LeRobotDataset.resume(
-            repo_id=args.dataset,
-            root=HF_LEROBOT_HOME / args.dataset,
+            repo_id=args.dataset_repo_id,
+            root=dataset_root,
             image_writer_threads=4,
         )
     else:
         dataset = LeRobotDataset.create(
-            repo_id=args.dataset,
+            repo_id=args.dataset_repo_id,
+            root=dataset_root,
             fps=args.fps,
             features=dataset_features,
             robot_type=robot.name,
@@ -184,7 +210,8 @@ def main():
     robot.disconnect()
     leader_arm.disconnect()
     keyboard.disconnect()
-    listener.stop()
+    if listener is not None:
+        listener.stop()
     dataset.finalize()
     print(f"Dataset saved locally at: {dataset.root.resolve()}")
     if args.push_to_hub:

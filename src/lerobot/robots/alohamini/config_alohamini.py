@@ -22,9 +22,9 @@ from ..config import RobotConfig
 
 def alohamini_cameras_config() -> dict[str, CameraConfig]:
     return {
-        # "forward": OpenCVCameraConfig(
-        #     index_or_path="/dev/am_camera_forward", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION
-        # ),
+        "forward": OpenCVCameraConfig(
+            index_or_path="/dev/am_camera_forward", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION
+        ),
         # "backward": OpenCVCameraConfig(
         #     index_or_path="/dev/am_camera_backward", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION
         # ),
