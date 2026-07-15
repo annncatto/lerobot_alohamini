@@ -276,7 +276,10 @@ Make sure the Pi host is already running (§5), then run inference from the PC.
 > `--robot.robot_model` must match the model running on the Pi host:  
 > `alohamini1` (SO-ARM 5-DoF, 16-dim state) · `alohamini2` / `alohamini2pro` (AM-ARM 6-DoF, 18-dim state)
 
-### `evaluate_bi.py` (custom script, N episodes, records to Hub)
+### `evaluate_bi.py` (custom script, N episodes)
+
+ACT uses synchronous inference. The interpolation multiplier below runs the robot control loop at
+`fps × multiplier` (20 × 3 = 60 Hz after the first action) and linearly interpolates between policy actions.
 
 ```bash
 python examples/alohamini/evaluate_bi.py \
@@ -286,11 +289,42 @@ python examples/alohamini/evaluate_bi.py \
   --dataset.single_task "Pick and place task" \
   --policy.path outputs/train/act_your_dataset1/checkpoints/020000/pretrained_model \
   --dataset.repo_id $HF_USER/eval_act_policy \
-  --dataset.push_to_hub=true \
+  --dataset.push_to_hub=false \
   --robot.remote_ip <Pi_IP> \
   --robot.id my_alohamini \
-  --robot.robot_model alohamini2
+  --robot.robot_model alohamini2 \
+  --inference.type sync \
+  --interpolation_multiplier 3
 ```
+
+SmolVLA supports Real-Time Chunking (RTC), which runs policy inference asynchronously and refreshes
+part of the action chunk while the robot executes queued actions:
+
+```bash
+python examples/alohamini/evaluate_bi.py \
+  --eval.n_episodes 3 \
+  --fps 20 \
+  --eval.episode_time_s 45 \
+  --dataset.single_task "Pick and place task" \
+  --policy.path outputs/train/smolvla_your_dataset1/checkpoints/020000/pretrained_model \
+  --dataset.repo_id $HF_USER/eval_smolvla_policy \
+  --dataset.push_to_hub=false \
+  --robot.remote_ip <Pi_IP> \
+  --robot.id my_alohamini \
+  --robot.robot_model alohamini2 \
+  --inference.type rtc \
+  --inference.rtc.execution_horizon 10 \
+  --inference.rtc.max_guidance_weight 10.0 \
+  --inference.rtc.queue_threshold 30 \
+  --interpolation_multiplier 1
+```
+
+> Both examples load a local checkpoint and save the evaluation dataset locally without uploading it.
+> Make sure the `--policy.path` directory exists and contains the complete pretrained model. Set
+> `HF_USER` before running (or replace `$HF_USER` with your username), and use a new
+> `--dataset.repo_id` for every evaluation because its local output directory must not already exist.
+> ACT does not support RTC; keep `--inference.type sync` for ACT. Replace `<Pi_IP>` with the Pi's IP,
+> and change `--robot.robot_model` if the Pi host is running `alohamini1` or `alohamini2pro`.
 
 ---
 
