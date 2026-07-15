@@ -287,6 +287,8 @@ def record_loop(
     no_action_count = 0
     timestamp = 0
     start_episode_t = time.perf_counter()
+    fps_report_count = 0
+    fps_report_start_t = start_episode_t
     while timestamp < control_time_s:
         start_loop_t = time.perf_counter()
 
@@ -363,6 +365,16 @@ def record_loop(
             )
 
         precise_sleep(max(sleep_time_s, 0.0))
+
+        fps_report_count += 1
+        now_t = time.perf_counter()
+        fps_report_elapsed_s = now_t - fps_report_start_t
+        if fps_report_elapsed_s >= 1.0:
+            logging.info(
+                f"Capture rate: {fps_report_count / fps_report_elapsed_s:.1f} Hz (target {fps} Hz)"
+            )
+            fps_report_count = 0
+            fps_report_start_t = now_t
 
         timestamp = time.perf_counter() - start_episode_t
 
