@@ -14,9 +14,10 @@ Dual-arm setup — PC (client) + Raspberry Pi (host) on the same LAN.
 │         PC (Client)          │ ◄───────────────► │      Raspberry Pi (Host)         │
 │                              │                   │                                  │
 │  • Leader arms (USB)         │                   │  • Follower arms (USB)           │
-│  • teleoperate_bi.py         │                   │  • Base wheels + lift (USB)      │
-│  • record_bi.py              │                   │  • Cameras (USB)                 │
-│  • Training / Evaluation     │                   │  • alohamini_host.py             │
+│  • calibrate_bi.py           │                   │  • Base wheels + lift (USB)      │
+│  • teleoperate_bi.py         │                   │  • Cameras (USB)                 │
+│  • record_bi.py              │                   │  • alohamini_host.py             │
+│  • Training / Evaluation     │                   │                                  │
 └──────────────────────────────┘                   └──────────────────────────────────┘
 ```
 
@@ -43,12 +44,14 @@ class AlohaMiniConfig(RobotConfig):
     right_port: str = "/dev/ttyACM1"   # replace with your right-bus port
 ```
 
-**Leader arms** — edit `examples/alohamini/teleoperate_bi.py` on the PC:
+**Leader arms** — the PC scripts use the stable device aliases below:
 
 ```python
-left_arm_config  = SOLeaderConfig(port="/dev/ttyACM2", ...)   # replace
-right_arm_config = SOLeaderConfig(port="/dev/ttyACM3", ...)   # replace
+left_arm_config  = SOLeaderConfig(port="/dev/am_arm_leader_left", ...)
+right_arm_config = SOLeaderConfig(port="/dev/am_arm_leader_right", ...)
 ```
+
+Set up the corresponding udev aliases as described in [commands.md](commands.md#persistent-arm-ports). If you use different paths, keep them consistent in `calibrate_bi.py`, `teleoperate_bi.py`, and `record_bi.py`.
 
 > Port numbers can change after reconnecting or rebooting. If you purchased a complete AlohaMini, the Pi's follower ports are already fixed via udev rules — no action needed.
 
@@ -89,14 +92,12 @@ SO-ARM 5-DoF reference middle position:
 
 ### Step 2 — Calibrate leader arms (PC side)
 
-Replace `<Pi_IP>` with your Raspberry Pi's IP address.
+This step connects only to the two leader arms, so the Pi host does not need to be running.
 
 SO-ARM leader (5-DoF):
 
 ```bash
-python examples/alohamini/teleoperate_bi.py \
-  --robot.remote_ip <Pi_IP> \
-  --robot.robot_model alohamini1 \
+python examples/alohamini/calibrate_bi.py \
   --teleop.id so101_leader_bi \
   --teleop.arm_profile so-arm-5dof
 ```
@@ -104,12 +105,14 @@ python examples/alohamini/teleoperate_bi.py \
 AM-ARM leader (6-DoF):
 
 ```bash
-python examples/alohamini/teleoperate_bi.py \
-  --robot.remote_ip <Pi_IP> \
-  --robot.robot_model alohamini2 \
+python examples/alohamini/calibrate_bi.py \
   --teleop.id am_leader_bi \
   --teleop.arm_profile am-leader-6dof
 ```
+
+Use the same `--teleop.id` and `--teleop.arm_profile` for later teleoperation and recording commands so they load the calibration files created here. If a calibration file already exists, press Enter to reuse it or enter `c` to recalibrate.
+
+Running this standalone step is recommended but optional. If it is skipped and no valid calibration is found, `teleoperate_bi.py` keeps the existing behavior: it prompts the user and enters the calibration flow automatically.
 
 > Power-cycle both leader and follower arms after calibration for changes to take effect.
 
@@ -117,7 +120,7 @@ python examples/alohamini/teleoperate_bi.py \
 
 ## 5. Teleoperation
 
-Start the Pi host first, then the PC client (calibration is skipped since it's already done):
+Start the Pi host first, then the PC client. A valid leader calibration is loaded automatically; if it is missing, the client prompts for calibration before teleoperation starts:
 
 ```bash
 # Pi — run the host for your robot:
