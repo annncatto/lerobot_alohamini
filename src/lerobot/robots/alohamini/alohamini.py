@@ -128,27 +128,35 @@ class AlohaMini(Robot):
             config.robot_model
         )
 
+        left_bus_motors = {
+            **(left_arm_motors_cfg if not config.no_follower else {}),
+            # base
+            "base_left_wheel": Motor(8, bm, MotorNormMode.RANGE_M100_100),
+            "base_back_wheel": Motor(9, bm, MotorNormMode.RANGE_M100_100),
+            "base_right_wheel": Motor(10, bm, MotorNormMode.RANGE_M100_100),
+            "lift_axis": Motor(11, lm, MotorNormMode.DEGREES),
+        }
+        left_bus_calibration = {
+            name: calibration
+            for name, calibration in self.calibration.items()
+            if name in left_bus_motors
+        }
         self.left_bus = FeetechMotorsBus(
             port=self.config.left_port,
-            motors={
-                **(left_arm_motors_cfg if not config.no_follower else {}),
-                # base
-                "base_left_wheel": Motor(8, bm, MotorNormMode.RANGE_M100_100),
-                "base_back_wheel": Motor(9, bm, MotorNormMode.RANGE_M100_100),
-                "base_right_wheel": Motor(10, bm, MotorNormMode.RANGE_M100_100),
-                "lift_axis": Motor(11, lm, MotorNormMode.DEGREES),
-            },
-            calibration=self.calibration,
+            motors=left_bus_motors,
+            calibration=left_bus_calibration,
         )
 
         if not config.no_follower:
+            right_bus_calibration = {
+                name: calibration
+                for name, calibration in self.calibration.items()
+                if name in right_arm_motors_cfg
+            }
             self.right_bus = FeetechMotorsBus(
                 port=self.config.right_port,
-                motors={
-                    **right_arm_motors_cfg,
-                    #"lift_axis": Motor(12, "sts3215", MotorNormMode.DEGREES),
-                },
-                calibration=self.calibration,
+                motors=right_arm_motors_cfg,
+                calibration=right_bus_calibration,
             )
         else:
             self.right_bus = None
