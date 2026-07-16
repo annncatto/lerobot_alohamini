@@ -160,6 +160,22 @@ def main():
     print("Starting record loop...")
     recorded_episodes = 0
 
+    def reset_environment() -> None:
+        """Reset the scene while continuously draining remote observations."""
+        log_say("Reset the environment")
+        record_loop(
+            robot=robot,
+            events=events,
+            fps=args.fps,
+            teleop=[leader_arm, keyboard],
+            control_time_s=args.reset_time,
+            single_task=args.task_description,
+            display_data=True,
+            teleop_action_processor=teleop_action_processor,
+            robot_action_processor=robot_action_processor,
+            robot_observation_processor=robot_observation_processor,
+        )
+
     while recorded_episodes < args.num_episodes and not events["stop_recording"]:
         log_say(f"Recording episode {recorded_episodes + 1} of {args.num_episodes}")
 
@@ -178,33 +194,22 @@ def main():
             robot_observation_processor=robot_observation_processor,
         )
 
-        # === Reset environment ===
-        if not events["stop_recording"] and (
-            (recorded_episodes < args.num_episodes - 1) or events["rerecord_episode"]
-        ):
-            log_say("Reset the environment")
-            record_loop(
-                robot=robot,
-                events=events,
-                fps=args.fps,
-                teleop=[leader_arm, keyboard],
-                control_time_s=args.reset_time,
-                single_task=args.task_description,
-                display_data=True,
-                teleop_action_processor=teleop_action_processor,
-                robot_action_processor=robot_action_processor,
-                robot_observation_processor=robot_observation_processor,
-            )
-
         if events["rerecord_episode"]:
             log_say("Re-record episode")
             events["rerecord_episode"] = False
             events["exit_early"] = False
             dataset.clear_episode_buffer()
+            if not events["stop_recording"]:
+                reset_environment()
             continue
 
+        # Saving may synchronously encode all camera videos. Do it before reset so the reset
+        # loop drains observations buffered while encoding and the next episode starts live.
         dataset.save_episode()
         recorded_episodes += 1
+
+        if not events["stop_recording"] and recorded_episodes < args.num_episodes:
+            reset_environment()
 
     # === Clean up ===
     log_say("Stop recording")
