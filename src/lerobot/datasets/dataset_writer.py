@@ -579,7 +579,7 @@ class DatasetWriter:
             # save_episode() mutates the buffer. Handle both types here.
             if isinstance(episode_index, np.ndarray):
                 episode_index = episode_index.item() if episode_index.size == 1 else episode_index[0]
-            for cam_key in self._meta.image_keys:
+            for cam_key in self._meta.camera_keys:
                 img_dir = self._get_image_file_dir(episode_index, cam_key)
                 if img_dir.is_dir():
                     shutil.rmtree(img_dir)

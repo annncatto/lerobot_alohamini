@@ -43,8 +43,10 @@ from pprint import pformat
 from queue import Queue
 from typing import Any
 
+import cv2
 import draccus
 import grpc
+import numpy as np
 import torch
 
 from lerobot.cameras.opencv import OpenCVCameraConfig  # noqa: F401
@@ -69,6 +71,7 @@ from .configs import RobotClientConfig
 from .helpers import (
     Action,
     FPSTracker,
+    JPEGImage,
     Observation,
     RawObservation,
     RemotePolicyConfig,
@@ -106,6 +109,9 @@ class RobotClient:
             lerobot_features,
             config.actions_per_chunk,
             config.policy_device,
+            inference_type=config.inference_type,
+            rtc_execution_horizon=config.rtc_execution_horizon,
+            rtc_max_guidance_weight=config.rtc_max_guidance_weight,
         )
         self.channel = grpc.insecure_channel(
             self.server_address, grpc_channel_options(initial_backoff=f"{config.environment_dt:.4f}s")
@@ -125,6 +131,9 @@ class RobotClient:
         self.action_queue = Queue()
         self.action_queue_lock = threading.Lock()  # Protect queue operations
         self.action_queue_size = []
+        self.observation_bytes_sent = 0
+        self.observation_send_seconds = 0.0
+        self.observation_send_count = 0
         self.start_barrier = threading.Barrier(2)  # 2 threads: action receiver, control loop
 
         # FPS measurement
@@ -205,6 +214,9 @@ class RobotClient:
                 silent=True,
             )
             _ = self.stub.SendObservations(observation_iterator)
+            self.observation_bytes_sent += len(observation_bytes)
+            self.observation_send_seconds += time.perf_counter() - start_time
+            self.observation_send_count += 1
             obs_timestep = obs.get_timestep()
             self.logger.debug(f"Sent observation #{obs_timestep} | ")
 
@@ -356,6 +368,8 @@ class RobotClient:
                     )
 
             except grpc.RpcError as e:
+                if not self.running and e.code() == grpc.StatusCode.CANCELLED:
+                    break
                 self.logger.error(f"Error receiving actions: {e}")
 
     def actions_available(self):
@@ -405,21 +419,48 @@ class RobotClient:
         with self.action_queue_lock:
             return self.action_queue.qsize() / self.action_chunk_size <= self._chunk_size_threshold
 
-    def control_loop_observation(self, task: str, verbose: bool = False) -> RawObservation:
+    def control_loop_observation(
+        self,
+        task: str,
+        verbose: bool = False,
+        raw_observation: RawObservation | None = None,
+        observation_timestamp: float | None = None,
+    ) -> RawObservation:
         try:
             # Get serialized observation bytes from the function
             start_time = time.perf_counter()
 
-            raw_observation: RawObservation = self.robot.get_observation()
+            if raw_observation is None:
+                raw_observation = self.robot.get_observation()
+            else:
+                raw_observation = dict(raw_observation)
+            if self.config.image_compression_quality:
+                encode_params = [cv2.IMWRITE_JPEG_QUALITY, self.config.image_compression_quality]
+                for key, feature in self.robot.observation_features.items():
+                    image = raw_observation.get(key)
+                    if not isinstance(feature, tuple) or not isinstance(image, np.ndarray):
+                        continue
+                    encoded_ok, encoded = cv2.imencode(".jpg", image, encode_params)
+                    if not encoded_ok:
+                        raise ValueError(f"Could not JPEG-encode observation image {key!r}")
+                    raw_observation[key] = JPEGImage(encoded.tobytes())
             raw_observation["task"] = task
 
             with self.latest_action_lock:
                 latest_action = self.latest_action
 
             observation = TimedObservation(
-                timestamp=time.time(),  # need time.time() to compare timestamps across client and server
+                # Use the Pi receive time supplied by the capture loop. Generating this timestamp
+                # after JPEG encoding/upload would hide queueing delay from freshness metrics.
+                timestamp=observation_timestamp if observation_timestamp is not None else time.time(),
                 observation=raw_observation,
-                timestep=max(latest_action, 0),
+                # sync/RTC requests are anchored at the next action that the robot will execute.
+                # Keep the historical async numbering unchanged for compatibility.
+                timestep=(
+                    latest_action + 1
+                    if self.config.inference_type in {"sync", "rtc"}
+                    else max(latest_action, 0)
+                ),
             )
 
             obs_capture_time = time.perf_counter() - start_time

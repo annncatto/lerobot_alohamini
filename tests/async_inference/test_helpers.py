@@ -25,8 +25,10 @@ import torch  # noqa: E402
 
 from lerobot.async_inference.helpers import (  # noqa: E402
     FPSTracker,
+    JPEGImage,
     TimedAction,
     TimedObservation,
+    extract_images_from_raw_observation,
     observations_similar,
     prepare_image,
     prepare_raw_observation,
@@ -167,6 +169,21 @@ def test_timed_data_deserialization_data_getters():
     assert to_out.must_go is True
     assert to_out.get_observation().keys() == obs_dict.keys()
     torch.testing.assert_close(to_out.get_observation()[OBS_STATE], obs_dict[OBS_STATE])
+
+
+def test_jpeg_observation_transport_round_trip():
+    """Compressed camera frames survive pickle transport and server-side decoding."""
+    cv2 = pytest.importorskip("cv2")
+    image = np.zeros((48, 64, 3), dtype=np.uint8)
+    image[:, :, 1] = 127
+    encoded_ok, encoded = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    assert encoded_ok
+
+    payload = pickle.loads(pickle.dumps({"camera": JPEGImage(encoded.tobytes())}))  # nosec B301
+    restored = extract_images_from_raw_observation(payload, "camera")
+
+    assert restored.dtype == torch.uint8
+    assert tuple(restored.shape) == image.shape
 
 
 # ---------------------------------------------------------------------
@@ -330,6 +347,31 @@ def test_prepare_raw_observation():
     # Check that images are tensors
     assert isinstance(laptop_img, torch.Tensor)
     assert isinstance(phone_img, torch.Tensor)
+
+
+def test_prepare_raw_observation_applies_camera_rename_before_resize():
+    robot_obs = _create_mock_robot_observation()
+    lerobot_features = _create_mock_lerobot_features()
+    policy_image_features = {
+        f"{OBS_IMAGES}.camera1": PolicyFeature(type=FeatureType.VISUAL, shape=(3, 224, 224)),
+        f"{OBS_IMAGES}.camera2": PolicyFeature(type=FeatureType.VISUAL, shape=(3, 160, 160)),
+    }
+    rename_map = {
+        f"{OBS_IMAGES}.laptop": f"{OBS_IMAGES}.camera1",
+        f"{OBS_IMAGES}.phone": f"{OBS_IMAGES}.camera2",
+    }
+
+    prepared = prepare_raw_observation(
+        robot_obs,
+        lerobot_features,
+        policy_image_features,
+        rename_map=rename_map,
+    )
+
+    assert f"{OBS_IMAGES}.laptop" not in prepared
+    assert f"{OBS_IMAGES}.phone" not in prepared
+    assert prepared[f"{OBS_IMAGES}.camera1"].shape == (3, 224, 224)
+    assert prepared[f"{OBS_IMAGES}.camera2"].shape == (3, 160, 160)
 
 
 def test_raw_observation_to_observation_basic():

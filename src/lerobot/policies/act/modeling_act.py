@@ -64,6 +64,15 @@ class ACTPolicy(PreTrainedPolicy):
 
         self.model = ACT(config)
 
+        action_dim = config.output_features[ACTION].shape[0]
+        configured_dims = set(config.fixed_action_dims) | set(config.inference_action_scale_dims)
+        configured_dims.update(dim for dims in config.action_loss_groups.values() for dim in dims)
+        invalid_dims = sorted(dim for dim in configured_dims if dim >= action_dim)
+        if invalid_dims:
+            raise ValueError(
+                f"ACT action dimension is {action_dim}, but configured indices {invalid_dims} are invalid."
+            )
+
         if config.temporal_ensemble_coeff is not None:
             self.temporal_ensembler = ACTTemporalEnsembler(config.temporal_ensemble_coeff, config.chunk_size)
 
@@ -132,6 +141,9 @@ class ACTPolicy(PreTrainedPolicy):
             batch[OBS_IMAGES] = [batch[key] for key in self.config.image_features]
 
         actions = self.model(batch)[0]
+        if self.config.fixed_action_dims:
+            actions = actions.clone()
+            actions[..., self.config.fixed_action_dims] = 0
         return actions
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict]:
@@ -140,14 +152,49 @@ class ACTPolicy(PreTrainedPolicy):
             batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
             batch[OBS_IMAGES] = [batch[key] for key in self.config.image_features]
 
+        if self.config.fixed_action_dims:
+            batch = dict(batch)
+            batch[ACTION] = batch[ACTION].clone()
+            batch[ACTION][..., self.config.fixed_action_dims] = 0
+
         actions_hat, (mu_hat, log_sigma_x2_hat) = self.model(batch)
 
-        abs_err = F.l1_loss(batch[ACTION], actions_hat, reduction="none")
-        valid_mask = ~batch["action_is_pad"].unsqueeze(-1)
-        num_valid = valid_mask.sum() * abs_err.shape[-1]
-        l1_loss = (abs_err * valid_mask).sum() / num_valid.clamp_min(1)
+        target_actions = batch[ACTION]
+        if self.config.fixed_action_dims:
+            actions_hat = actions_hat.clone()
+            actions_hat[..., self.config.fixed_action_dims] = 0
 
-        loss_dict = {"l1_loss": l1_loss.item()}
+        abs_err = F.l1_loss(target_actions, actions_hat, reduction="none")
+        valid_mask = ~batch["action_is_pad"].unsqueeze(-1)
+        loss_dict = {}
+        if self.config.action_loss_groups:
+            weighted_losses = []
+            total_weight = 0.0
+            for name, dims in self.config.action_loss_groups.items():
+                if not dims:
+                    continue
+                group_err = abs_err[..., dims]
+                group_loss = (group_err * valid_mask).sum() / (
+                    valid_mask.sum() * len(dims)
+                ).clamp_min(1)
+                weight = self.config.action_loss_weights.get(name, 1.0)
+                loss_dict[f"l1_loss_{name}"] = group_loss.item()
+                if weight > 0:
+                    weighted_losses.append(group_loss * weight)
+                    total_weight += weight
+            if not weighted_losses:
+                raise ValueError("ACT action loss groups have no dimensions with a positive weight.")
+            l1_loss = torch.stack(weighted_losses).sum() / total_weight
+        else:
+            active_dims = [dim for dim in range(abs_err.shape[-1]) if dim not in self.config.fixed_action_dims]
+            if not active_dims:
+                raise ValueError("ACT has no trainable action dimensions.")
+            active_err = abs_err[..., active_dims]
+            l1_loss = (active_err * valid_mask).sum() / (
+                valid_mask.sum() * len(active_dims)
+            ).clamp_min(1)
+
+        loss_dict["l1_loss"] = l1_loss.item()
         if self.config.use_vae and log_sigma_x2_hat is not None:
             # Calculate Dₖₗ(latent_pdf || standard_normal). Note: After computing the KL-divergence for
             # each dimension independently, we sum over the latent dimension to get the total
@@ -401,7 +448,14 @@ class ACT(nn.Module):
                 "actions must be provided when using the variational objective in training mode."
             )
 
-        batch_size = batch[OBS_IMAGES][0].shape[0] if OBS_IMAGES in batch else batch[OBS_ENV_STATE].shape[0]
+        if OBS_IMAGES in batch:
+            reference_tensor = batch[OBS_IMAGES][0]
+        elif OBS_STATE in batch:
+            reference_tensor = batch[OBS_STATE]
+        else:
+            reference_tensor = batch[OBS_ENV_STATE]
+        batch_size = reference_tensor.shape[0]
+        batch_device = reference_tensor.device
 
         # Prepare the latent for input to the transformer encoder.
         if self.config.use_vae and ACTION in batch and self.training:
@@ -430,7 +484,7 @@ class ACT(nn.Module):
             cls_joint_is_pad = torch.full(
                 (batch_size, 2 if self.config.robot_state_feature else 1),
                 False,
-                device=batch[OBS_STATE].device,
+                device=batch_device,
             )
             key_padding_mask = torch.cat(
                 [cls_joint_is_pad, batch["action_is_pad"]], axis=1
@@ -454,7 +508,7 @@ class ACT(nn.Module):
             mu = log_sigma_x2 = None
             # TODO(rcadene, alexander-soare): remove call to `.to` to speedup forward ; precompute and use buffer
             latent_sample = torch.zeros([batch_size, self.config.latent_dim], dtype=torch.float32).to(
-                batch[OBS_STATE].device
+                batch_device
             )
 
         # Prepare transformer encoder inputs.

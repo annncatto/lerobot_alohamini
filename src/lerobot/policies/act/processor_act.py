@@ -22,15 +22,39 @@ from lerobot.processor import (
     DeviceProcessorStep,
     NormalizerProcessorStep,
     PolicyAction,
+    PolicyActionProcessorStep,
     PolicyProcessorPipeline,
     RenameObservationsProcessorStep,
     UnnormalizerProcessorStep,
     policy_action_to_transition,
     transition_to_policy_action,
 )
+from lerobot.processor.pipeline import ProcessorStepRegistry
 from lerobot.utils.constants import POLICY_POSTPROCESSOR_DEFAULT_NAME, POLICY_PREPROCESSOR_DEFAULT_NAME
 
 from .configuration_act import ACTConfig
+
+
+@ProcessorStepRegistry.register("act_action_safety_scale")
+class ACTActionSafetyScaleProcessorStep(PolicyActionProcessorStep):
+    """Scale selected physical action dimensions after unnormalization."""
+
+    def __init__(self, dims: list[int], scale: float) -> None:
+        self.dims = dims
+        self.scale = scale
+
+    def action(self, action: PolicyAction) -> PolicyAction:
+        if not self.dims or self.scale == 1.0:
+            return action
+        action = action.clone()
+        action[..., self.dims] *= self.scale
+        return action
+
+    def get_config(self) -> dict[str, Any]:
+        return {"dims": self.dims, "scale": self.scale}
+
+    def transform_features(self, features):
+        return features
 
 
 def make_act_pre_post_processors(
@@ -70,8 +94,15 @@ def make_act_pre_post_processors(
         UnnormalizerProcessorStep(
             features=config.output_features, norm_map=config.normalization_mapping, stats=dataset_stats
         ),
-        DeviceProcessorStep(device="cpu"),
     ]
+    if config.inference_action_scale_dims and config.inference_action_scale != 1.0:
+        output_steps.append(
+            ACTActionSafetyScaleProcessorStep(
+                dims=config.inference_action_scale_dims,
+                scale=config.inference_action_scale,
+            )
+        )
+    output_steps.append(DeviceProcessorStep(device="cpu"))
 
     return (
         PolicyProcessorPipeline[dict[str, Any], dict[str, Any]](

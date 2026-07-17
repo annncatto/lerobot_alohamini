@@ -121,6 +121,18 @@ class ACTConfig(PreTrainedConfig):
     # Training and loss computation.
     dropout: float = 0.1
     kl_weight: float = 10.0
+    # Action dimensions that are constant in the task. They are forced to zero in
+    # normalized space during training and inference, then restored by the action
+    # unnormalizer at inference time.
+    fixed_action_dims: list[int] = field(default_factory=list)
+    # Optional named groups for independently normalized reconstruction losses.
+    action_loss_groups: dict[str, list[int]] = field(default_factory=dict)
+    action_loss_weights: dict[str, float] = field(default_factory=dict)
+
+    # Physical action dimensions to scale after unnormalization at inference.
+    # This is intended for velocity commands, not absolute joint positions.
+    inference_action_scale_dims: list[int] = field(default_factory=list)
+    inference_action_scale: float = 1.0
 
     # Training preset
     optimizer_lr: float = 1e-5
@@ -149,6 +161,14 @@ class ACTConfig(PreTrainedConfig):
             raise ValueError(
                 f"Multiple observation steps not handled yet. Got `nobs_steps={self.n_obs_steps}`"
             )
+        if any(dim < 0 for dim in self.fixed_action_dims):
+            raise ValueError("`fixed_action_dims` must contain non-negative indices.")
+        if len(set(self.fixed_action_dims)) != len(self.fixed_action_dims):
+            raise ValueError("`fixed_action_dims` must not contain duplicate indices.")
+        if self.inference_action_scale < 0:
+            raise ValueError("`inference_action_scale` must be non-negative.")
+        if any(weight < 0 for weight in self.action_loss_weights.values()):
+            raise ValueError("`action_loss_weights` must be non-negative.")
 
     def get_optimizer_preset(self) -> AdamWConfig:
         return AdamWConfig(

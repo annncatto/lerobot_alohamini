@@ -143,6 +143,16 @@ class RobotClientConfig:
         metadata={"help": f"Name of aggregate function to use. Options: {list(AGGREGATE_FUNCTIONS.keys())}"},
     )
 
+    # Inference semantics. ``async`` preserves the historical action-chunk
+    # aggregation protocol; ``sync`` and ``rtc`` mirror rollout.inference.
+    inference_type: str = field(default="async", metadata={"help": "async, sync, or rtc"})
+    rtc_execution_horizon: int = field(default=10)
+    rtc_max_guidance_weight: float = field(default=10.0)
+    image_compression_quality: int = field(
+        default=0,
+        metadata={"help": "JPEG quality for observation transport (1-100, 0 disables compression)"},
+    )
+
     # Debug configuration
     debug_visualize_queue_size: bool = field(
         default=False, metadata={"help": "Visualize the action queue size"}
@@ -178,6 +188,15 @@ class RobotClientConfig:
 
         if self.actions_per_chunk <= 0:
             raise ValueError(f"actions_per_chunk must be positive, got {self.actions_per_chunk}")
+
+        if self.inference_type not in {"async", "sync", "rtc"}:
+            raise ValueError(f"inference_type must be async, sync, or rtc, got {self.inference_type!r}")
+        if self.rtc_execution_horizon <= 0:
+            raise ValueError("rtc_execution_horizon must be positive")
+        if self.rtc_max_guidance_weight <= 0:
+            raise ValueError("rtc_max_guidance_weight must be positive")
+        if not 0 <= self.image_compression_quality <= 100:
+            raise ValueError("image_compression_quality must be between 0 and 100")
 
         self.aggregate_fn = get_aggregate_function(self.aggregate_fn_name)
 

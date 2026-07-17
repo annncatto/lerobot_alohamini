@@ -69,6 +69,8 @@ class AlohaMiniClient(Robot):
         self.last_frames = {}
 
         self.last_remote_state = {}
+        self.observation_messages_received = 0
+        self.observation_poll_timeouts = 0
         self._lift_target_mm = None
 
         # Define three speed levels and a current index
@@ -167,6 +169,7 @@ class AlohaMiniClient(Robot):
             return None
 
         if self.zmq_observation_socket not in socks:
+            self.observation_poll_timeouts += 1
             logging.info("No new data available within timeout.")
             return None
 
@@ -180,6 +183,8 @@ class AlohaMiniClient(Robot):
 
         if last_msg is None:
             logging.info("Poller indicated data, but failed to retrieve message.")
+        else:
+            self.observation_messages_received += 1
 
         return last_msg
 

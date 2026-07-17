@@ -5,27 +5,26 @@ import inspect
 import time
 
 import lerobot.robots.alohamini  # noqa: F401 — registers alohamini_client robot type
-
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.datasets import aggregate_pipeline_dataset_features, create_initial_features
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.policies import get_policy_class, make_pre_post_processors
 from lerobot.policies.rtc.configuration_rtc import RTCConfig
 from lerobot.processor import make_default_processors
+from lerobot.robots.alohamini import AlohaMiniClient, AlohaMiniClientConfig
 from lerobot.rollout.inference.factory import (
     RTCInferenceConfig,
     SyncInferenceConfig,
     create_inference_engine,
 )
 from lerobot.rollout.robot_wrapper import ThreadSafeRobot
-from lerobot.robots.alohamini import AlohaMiniClient, AlohaMiniClientConfig
 from lerobot.utils.action_interpolator import ActionInterpolator
+from lerobot.utils.action_quantization import snap_planar_velocity
 from lerobot.utils.constants import ACTION, OBS_STR
 from lerobot.utils.device_utils import auto_select_torch_device
 from lerobot.utils.feature_utils import build_dataset_frame, combine_feature_dicts, hw_to_dataset_features
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import log_say
-from lerobot.utils.visualization_utils import init_rerun
 
 
 def parse_bool(value: str | bool) -> bool:
@@ -53,7 +52,16 @@ def main():
         default="robot task",
     )
     parser.add_argument("--policy.path", "--hf_model_id", dest="policy_path", type=str, required=True)
-    parser.add_argument("--dataset.repo_id", "--hf_dataset_id", dest="dataset_repo_id", type=str, required=True)
+    parser.add_argument("--dataset.repo_id", "--hf_dataset_id", dest="dataset_repo_id", type=str)
+    parser.add_argument(
+        "--eval.record_dataset",
+        dest="record_dataset",
+        type=parse_bool,
+        nargs="?",
+        const=True,
+        default=True,
+        help="Record observations and actions as a LeRobotDataset during evaluation.",
+    )
     parser.add_argument(
         "--dataset.push_to_hub",
         dest="push_to_hub",
@@ -114,7 +122,27 @@ def main():
         help="Send N interpolated actions per policy action for a smoother, higher-rate control loop "
         "(1 = disabled).",
     )
+    parser.add_argument(
+        "--action.base_snap_speed",
+        dest="base_snap_speed",
+        type=float,
+        default=0.15,
+        help="Snap x.vel/y.vel to {-speed, 0, +speed}; set 0 to disable.",
+    )
+    parser.add_argument(
+        "--action.base_snap_deadband",
+        dest="base_snap_deadband",
+        type=float,
+        default=0.05,
+        help="Predicted |x.vel|/|y.vel| at or below this value is sent as zero.",
+    )
     args = parser.parse_args()
+    if args.base_snap_speed < 0:
+        raise ValueError("--action.base_snap_speed cannot be negative")
+    if args.base_snap_deadband < 0:
+        raise ValueError("--action.base_snap_deadband cannot be negative")
+    if args.record_dataset and not args.dataset_repo_id:
+        raise ValueError("--dataset.repo_id is required when --eval.record_dataset=true")
 
     device = str(auto_select_torch_device())
 
@@ -128,9 +156,9 @@ def main():
     # lerobot.rollout.context.build_rollout_context) ===
     if args.inference_type == "rtc":
         predict_chunk_params = inspect.signature(policy_class.predict_action_chunk).parameters
-        accepts_rtc_kwargs = {"inference_delay", "prev_chunk_left_over"}.issubset(predict_chunk_params) or any(
-            p.kind == inspect.Parameter.VAR_KEYWORD for p in predict_chunk_params.values()
-        )
+        accepts_rtc_kwargs = {"inference_delay", "prev_chunk_left_over"}.issubset(
+            predict_chunk_params
+        ) or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in predict_chunk_params.values())
         if not accepts_rtc_kwargs:
             raise ValueError(
                 f"Policy type '{policy_cfg.type}' does not support RTC inference: "
@@ -153,8 +181,9 @@ def main():
     policy.eval()
 
     # === Robot ===
-    robot_config = AlohaMiniClientConfig(remote_ip=args.remote_ip, id=args.robot_id,
-                                         robot_model=args.robot_model)
+    robot_config = AlohaMiniClientConfig(
+        remote_ip=args.remote_ip, id=args.robot_id, robot_model=args.robot_model
+    )
     robot = AlohaMiniClient(robot_config)
     robot.connect()
     robot_wrapper = ThreadSafeRobot(robot)
@@ -182,20 +211,22 @@ def main():
     ordered_action_keys = list(action_features_hw.keys())
 
     # === Dataset ===
-    dataset = LeRobotDataset.create(
-        repo_id=args.dataset_repo_id,
-        fps=args.fps,
-        features=dataset_features,
-        robot_type=robot.name,
-        use_videos=True,
-        image_writer_threads=4,
-    )
+    dataset = None
+    if args.record_dataset:
+        dataset = LeRobotDataset.create(
+            repo_id=args.dataset_repo_id,
+            fps=args.fps,
+            features=dataset_features,
+            robot_type=robot.name,
+            use_videos=True,
+            image_writer_threads=4,
+        )
 
     # === Policy processors (needs dataset stats) ===
     preprocessor, postprocessor = make_pre_post_processors(
         policy_cfg=policy_cfg,
         pretrained_path=args.policy_path,
-        dataset_stats=dataset.meta.stats,
+        dataset_stats=dataset.meta.stats if dataset is not None else None,
         preprocessor_overrides={"device_processor": {"device": device}},
     )
 
@@ -216,7 +247,7 @@ def main():
     engine.start()
     engine.resume()
 
-    #init_rerun(session_name="alohamini_evaluate")
+    # init_rerun(session_name="alohamini_evaluate")
     log_say("Starting evaluation")
 
     interpolator = ActionInterpolator(multiplier=args.interpolation_multiplier)
@@ -250,23 +281,31 @@ def main():
             interp_action = interpolator.get()
             if interp_action is not None:
                 action_dict = {k: interp_action[i].item() for i, k in enumerate(ordered_action_keys)}
+                action_dict = snap_planar_velocity(
+                    action_dict,
+                    speed=args.base_snap_speed,
+                    deadband=args.base_snap_deadband,
+                )
                 robot.send_action(robot_action_processor((action_dict, obs_raw)))
-                action_frame = build_dataset_frame(dataset_features, action_dict, prefix=ACTION)
-                dataset.add_frame({**obs_frame, **action_frame, "task": args.task_description})
+                if dataset is not None:
+                    action_frame = build_dataset_frame(dataset_features, action_dict, prefix=ACTION)
+                    dataset.add_frame({**obs_frame, **action_frame, "task": args.task_description})
 
             dt = time.perf_counter() - loop_start
             if (sleep_t := control_interval - dt) > 0:
                 precise_sleep(sleep_t)
 
-        dataset.save_episode()
+        if dataset is not None:
+            dataset.save_episode()
         recorded += 1
 
     log_say("Evaluation complete")
     engine.stop()
     robot.disconnect()
-    dataset.finalize()
-    if args.push_to_hub:
-        dataset.push_to_hub()
+    if dataset is not None:
+        dataset.finalize()
+        if args.push_to_hub:
+            dataset.push_to_hub()
 
 
 if __name__ == "__main__":

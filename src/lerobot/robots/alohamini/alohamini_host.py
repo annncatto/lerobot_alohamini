@@ -134,6 +134,10 @@ def main():
         # Business logic
         start = time.perf_counter()
         duration = 0
+        metrics_start = time.perf_counter()
+        metrics_cycles = 0
+        metrics_capture_seconds = 0.0
+        metrics_encode_seconds = 0.0
 
         while duration < host.connection_time_s:
             loop_start_time = time.time()
@@ -159,15 +163,33 @@ def main():
                 robot.stop_motion()
 
             
+            capture_start = time.perf_counter()
             last_observation = robot.get_observation()
+            metrics_capture_seconds += time.perf_counter() - capture_start
 
+            encode_start = time.perf_counter()
             observation_parts = build_observation_multipart(last_observation, robot.cameras.keys())
+            metrics_encode_seconds += time.perf_counter() - encode_start
 
             # Send the observation to the remote agent
             try:
                 host.zmq_observation_socket.send_multipart(observation_parts, flags=zmq.NOBLOCK)
             except zmq.Again:
                 logging.info("Dropping observation, no client connected")
+
+            metrics_cycles += 1
+            metrics_elapsed = time.perf_counter() - metrics_start
+            if metrics_elapsed >= 5:
+                logging.info(
+                    "Host observation loop: hz=%.2f mean_capture_ms=%.1f mean_encode_ms=%.1f",
+                    metrics_cycles / metrics_elapsed,
+                    metrics_capture_seconds / metrics_cycles * 1000,
+                    metrics_encode_seconds / metrics_cycles * 1000,
+                )
+                metrics_start = time.perf_counter()
+                metrics_cycles = 0
+                metrics_capture_seconds = 0.0
+                metrics_encode_seconds = 0.0
 
             # Ensure a short sleep to avoid overloading the CPU.
             elapsed = time.time() - loop_start_time

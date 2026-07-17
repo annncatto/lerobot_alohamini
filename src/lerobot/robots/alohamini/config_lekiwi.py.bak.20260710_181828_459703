@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 from dataclasses import dataclass, field
 
 from lerobot.cameras.configs import CameraConfig, Cv2Rotation
@@ -21,11 +20,11 @@ from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 from ..config import RobotConfig
 
 
-def _alohamini_upstream_cameras_config() -> dict[str, CameraConfig]:
+def lekiwi_cameras_config() -> dict[str, CameraConfig]:
     return {
-        "forward": OpenCVCameraConfig(
-            index_or_path="/dev/am_camera_forward", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION, fourcc="MJPG"
-        ),
+        # "forward": OpenCVCameraConfig(
+        #     index_or_path="/dev/am_camera_forward", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION
+        # ),
         # "backward": OpenCVCameraConfig(
         #     index_or_path="/dev/am_camera_backward", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION
         # ),
@@ -41,48 +40,9 @@ def _alohamini_upstream_cameras_config() -> dict[str, CameraConfig]:
     }
 
 
-def _camera_catalog() -> dict[str, CameraConfig]:
-    return {
-        "forward": OpenCVCameraConfig(
-            index_or_path="/dev/am_camera_forward", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION
-        ),
-        "backward": OpenCVCameraConfig(
-            index_or_path="/dev/am_camera_backward", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION, fourcc="MJPG"
-        ),
-        "chest": OpenCVCameraConfig(
-            index_or_path="/dev/am_camera_chest", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION, fourcc="MJPG"
-        ),
-        "wrist_left": OpenCVCameraConfig(
-            index_or_path="/dev/am_camera_wrist_left", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION, fourcc="MJPG"
-        ),
-        "wrist_right": OpenCVCameraConfig(
-            index_or_path="/dev/am_camera_wrist_right", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION, fourcc="MJPG"
-        ),
-    }
-
-
-def alohamini_cameras_config() -> dict[str, CameraConfig]:
-    requested = os.getenv("ALOHAMINI_CAMERAS")
-    if requested is None:
-        return _alohamini_upstream_cameras_config()
-
-    requested = requested.strip()
-    if not requested:
-        return {}
-
-    catalog = _camera_catalog()
-    names = [name.strip() for name in requested.split(",") if name.strip()]
-    unknown = [name for name in names if name not in catalog]
-    if unknown:
-        raise ValueError(
-            f"Unknown ALOHAMINI_CAMERAS entries: {unknown}. Available cameras: {list(catalog)}"
-        )
-    return {name: catalog[name] for name in names}
-
-
 @RobotConfig.register_subclass("alohamini")
 @dataclass
-class AlohaMiniConfig(RobotConfig):
+class LeKiwiConfig(RobotConfig):
     left_port: str = "/dev/am_arm_follower_left"  # port to connect to the bus
     right_port: str = "/dev/am_arm_follower_right"  # port to connect to the bus
     disable_torque_on_disconnect: bool = True
@@ -98,7 +58,7 @@ class AlohaMiniConfig(RobotConfig):
     # the number of motors in your follower arms.
     max_relative_target: int | None = None
 
-    cameras: dict[str, CameraConfig] = field(default_factory=alohamini_cameras_config)
+    cameras: dict[str, CameraConfig] = field(default_factory=lekiwi_cameras_config)
 
     # Set to `True` for backward compatibility with previous policies/dataset
     use_degrees: bool = False
@@ -111,7 +71,7 @@ class AlohaMiniConfig(RobotConfig):
 
 
 @dataclass
-class AlohaMiniHostConfig:
+class LeKiwiHostConfig:
     # Network Configuration
     port_zmq_cmd: int = 5555
     port_zmq_observations: int = 5556
@@ -130,7 +90,7 @@ class AlohaMiniHostConfig:
 
 @RobotConfig.register_subclass("alohamini_client")
 @dataclass
-class AlohaMiniClientConfig(RobotConfig):
+class LeKiwiClientConfig(RobotConfig):
     # Network Configuration
     remote_ip: str
     port_zmq_cmd: int = 5555
@@ -162,7 +122,7 @@ class AlohaMiniClientConfig(RobotConfig):
         }
     )
 
-    cameras: dict[str, CameraConfig] = field(default_factory=alohamini_cameras_config)
+    cameras: dict[str, CameraConfig] = field(default_factory=lekiwi_cameras_config)
 
     polling_timeout_ms: int = 15
     connect_timeout_s: int = 5

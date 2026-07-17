@@ -170,6 +170,41 @@ def test_maybe_enqueue_observation_is_skipped(policy_server):
     assert policy_server.observation_queue.empty() is True
 
 
+def test_rtc_enqueues_visually_new_frame_even_when_state_is_similar(policy_server):
+    """RTC must not discard a new camera frame based only on unchanged joint/velocity state."""
+    policy_server.inference_type = "rtc"
+    policy_server.last_processed_obs = _make_obs(torch.zeros(6), timestep=1)
+    new_obs = _make_obs(torch.zeros(6), timestep=2)
+    new_obs.get_observation()["camera"] = torch.ones(3, 8, 8)
+
+    assert policy_server._enqueue_observation(new_obs) is True
+    assert policy_server.observation_queue.get_nowait() is new_obs
+    assert policy_server.observations_enqueued == 1
+
+
+def test_visual_async_policy_does_not_use_state_only_similarity_filter(policy_server):
+    policy_server.inference_type = "async"
+    policy_server.policy.config = type("VisualConfig", (), {"image_features": {"camera": object()}})()
+    policy_server.last_processed_obs = _make_obs(torch.zeros(6), timestep=1)
+    new_obs = _make_obs(torch.zeros(6), timestep=2)
+
+    assert policy_server._enqueue_observation(new_obs) is True
+    assert policy_server.observation_queue.get_nowait() is new_obs
+
+
+def test_rtc_observation_queue_replaces_pending_frame_with_latest(policy_server):
+    policy_server.inference_type = "rtc"
+    old_obs = _make_obs(torch.zeros(6), timestep=1)
+    latest_obs = _make_obs(torch.zeros(6), timestep=2)
+
+    assert policy_server._enqueue_observation(old_obs) is True
+    assert policy_server._enqueue_observation(latest_obs) is True
+
+    assert policy_server.observation_queue.qsize() == 1
+    assert policy_server.observation_queue.get_nowait() is latest_obs
+    assert policy_server.observations_replaced == 1
+
+
 def test_obs_sanity_checks(policy_server):
     """Unit-test the private `_obs_sanity_checks` helper."""
     prev = _make_obs(torch.zeros(6), timestep=0)
