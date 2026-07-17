@@ -22,9 +22,9 @@ from ..config import RobotConfig
 
 def alohamini_cameras_config() -> dict[str, CameraConfig]:
     return {
-        "forward": OpenCVCameraConfig(
-            index_or_path="/dev/am_camera_forward", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION
-        ),
+        # "forward": OpenCVCameraConfig(
+        #     index_or_path="/dev/am_camera_forward", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION
+        # ),
         # "backward": OpenCVCameraConfig(
         #     index_or_path="/dev/am_camera_backward", fps=30, width=640, height=480, rotation=Cv2Rotation.NO_ROTATION
         # ),
@@ -124,5 +124,6 @@ class AlohaMiniClientConfig(RobotConfig):
 
     cameras: dict[str, CameraConfig] = field(default_factory=alohamini_cameras_config)
 
-    polling_timeout_ms: int = 15
+    # Must exceed one host cycle at 30 Hz for request/reply observation transport.
+    polling_timeout_ms: int = 200
     connect_timeout_s: int = 5
