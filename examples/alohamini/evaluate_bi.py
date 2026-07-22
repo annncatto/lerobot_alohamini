@@ -2,6 +2,7 @@
 
 import argparse
 import inspect
+import math
 import time
 
 import lerobot.robots.alohamini  # noqa: F401 — registers alohamini_client robot type
@@ -45,6 +46,14 @@ def main():
     parser.add_argument("--eval.n_episodes", "--num_episodes", dest="num_episodes", type=int, default=2)
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--eval.episode_time_s", "--episode_time", dest="episode_time", type=int, default=60)
+    parser.add_argument(
+        "--eval.reset_time_s",
+        "--reset_time",
+        dest="reset_time",
+        type=float,
+        default=10.0,
+        help="Reset duration between evaluation episodes in seconds.",
+    )
     parser.add_argument(
         "--dataset.single_task",
         "--task_description",
@@ -115,6 +124,8 @@ def main():
         "(1 = disabled).",
     )
     args = parser.parse_args()
+    if args.reset_time < 0:
+        parser.error("--eval.reset_time_s must be non-negative")
 
     device = str(auto_select_torch_device())
 
@@ -214,7 +225,6 @@ def main():
         device=device,
     )
     engine.start()
-    engine.resume()
 
     #init_rerun(session_name="alohamini_evaluate")
     log_say("Starting evaluation")
@@ -223,10 +233,39 @@ def main():
     control_interval = interpolator.get_control_interval(args.fps)
     recorded = 0
 
+    def reset_environment(next_episode: int) -> None:
+        """Wait for manual scene reset while draining remote observations."""
+        if args.reset_time == 0:
+            return
+
+        deadline = time.monotonic() + args.reset_time
+        last_remaining = None
+        while True:
+            remaining = max(0, math.ceil(deadline - time.monotonic()))
+            if remaining != last_remaining:
+                print(
+                    f"\r[RESET] Prepare evaluation episode {next_episode}/{args.num_episodes}: "
+                    f"{remaining}s remaining",
+                    end="",
+                    flush=True,
+                )
+                last_remaining = remaining
+            if remaining == 0:
+                break
+
+            # Keep consuming observations during reset so the next episode starts
+            # from a fresh remote frame rather than one cached before the reset.
+            robot.get_observation()
+            sleep_t = min(control_interval, max(0.0, deadline - time.monotonic()))
+            if sleep_t > 0:
+                precise_sleep(sleep_t)
+        print(flush=True)
+
     while recorded < args.num_episodes:
         log_say(f"Eval episode {recorded + 1} of {args.num_episodes}")
         engine.reset()
         interpolator.reset()
+        engine.resume()
         start = time.perf_counter()
         cached_obs_processed = None
 
@@ -258,8 +297,11 @@ def main():
             if (sleep_t := control_interval - dt) > 0:
                 precise_sleep(sleep_t)
 
+        engine.pause()
         dataset.save_episode()
         recorded += 1
+        if recorded < args.num_episodes:
+            reset_environment(recorded + 1)
 
     log_say("Evaluation complete")
     engine.stop()
