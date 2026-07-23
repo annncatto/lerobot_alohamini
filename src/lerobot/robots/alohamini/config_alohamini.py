@@ -114,8 +114,8 @@ class AlohaMiniClientConfig(RobotConfig):
             "rotate_left": "a",
             "rotate_right": "d",
             # Speed control
-            "speed_up": "r",
-            "speed_down": "f",
+            "speed_up": "t",
+            "speed_down": "g",
             # Z axis
             "lift_up": "u",
             "lift_down": "j",
