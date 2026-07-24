@@ -12,7 +12,7 @@ python -m lerobot.scripts.lerobot_train \
   --dataset.root=/path/to/my_dataset \
   --policy.type=am_act \
   --policy.device=cuda \
-  --policy.fixed_action_dims='[0,1,2,3,4,5,6]' \
+  --policy.fixed_action_dims='[]' \
   --policy.discrete_action_dims='[14,15,16]' \
   --policy.discrete_action_values='[[-0.15,0,0.15],[-0.15,0,0.15],[-45,0,45]]' \
   --policy.discrete_action_class_weights='[[3,1,1.5],[3,1,2],[2,1,2]]' \
