@@ -30,14 +30,14 @@
     <parent link="left_Rotation_Pitch" />
     <child link="left_Upper_Arm" />
     <axis xyz="0 0 -1" />
-    <limit lower="-3.29519440558" upper="0.160864309523" effort="2.3" velocity="4" />
+    <limit lower="-3.29519440558" upper="0.160864309523" effort="2.21" velocity="2.48" />
   </joint>
   <joint name="left_elbow_flex" type="revolute">
     <origin xyz="-0.041170749065642 0.128514358904429 0" rpy="0 0 0" />
     <parent link="left_Upper_Arm" />
     <child link="left_Lower_Arm" />
     <axis xyz="0 0 -1" />
-    <limit lower="-0.0703594430376" upper="3.22002934698" effort="2.3" velocity="4" />
+    <limit lower="-0.0703594430376" upper="3.22002934698" effort="2.21" velocity="2.48" />
   </joint>
   <joint name="left_wrist_flex" type="revolute">
     <origin xyz="0.00320470342874501 -0.198428485161884 0" rpy="0 0 0" />

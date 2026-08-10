@@ -3,8 +3,8 @@
   "asset": "alohamini2pro",
   "source_files": {
     "urdf/alohamini2pro.urdf": {
-      "sha256": "cd37bd0b58ea93132cce12f9475fdd4737e13a3c7a54cb813204da69f11d066e",
-      "size": 38297
+      "sha256": "63453055a476eb3863c87eb1dc65c841e1fd5829019dda8c8ff2ef46b270e120",
+      "size": 38315
     },
     "urdf/alohamini2pro.srdf": {
       "sha256": "11457a38c3eaf3e8f3e81839c82b1b8bee91c2e0ebc8c61caba31da1e0848159",
@@ -27,8 +27,8 @@
       "size": 2760
     },
     "config/joint_limits.yaml": {
-      "sha256": "18809eecb099fbe0766b22861036ee322cbac1ea2bf5a84f901954d15e2f036c",
-      "size": 2711
+      "sha256": "2254c5ae264e0e8e0b08a40effe89575854962ac13e7c674ea77f5722100f2ff",
+      "size": 2754
     }
   },
   "shared_calibration": {
