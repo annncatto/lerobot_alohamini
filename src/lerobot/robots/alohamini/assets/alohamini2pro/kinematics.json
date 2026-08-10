@@ -1,0 +1,288 @@
+{
+  "schema_version": 1,
+  "asset": "alohamini2pro",
+  "source_files": {
+    "urdf/alohamini2pro.urdf": {
+      "sha256": "cd37bd0b58ea93132cce12f9475fdd4737e13a3c7a54cb813204da69f11d066e",
+      "size": 38297
+    },
+    "urdf/alohamini2pro.srdf": {
+      "sha256": "11457a38c3eaf3e8f3e81839c82b1b8bee91c2e0ebc8c61caba31da1e0848159",
+      "size": 992
+    },
+    "config/kinematics.yaml": {
+      "sha256": "7c937de3e803bc4827f162f759ae89e10400f8cd50b1d1482853fbdfcbc866c0",
+      "size": 745
+    },
+    "config/right_arm_kinematics.yaml": {
+      "sha256": "90d214b38c7c0754bcc46b7449468f0a11c0cdcde149b700db271ea9700b7035",
+      "size": 3061
+    },
+    "config/hardware_joint_map_left.yaml": {
+      "sha256": "0843acc1d986da94f36131cfbfa7887cbc14e5fd291cd179f247eca2d1d8571e",
+      "size": 493
+    },
+    "config/hardware_joint_map_right.yaml": {
+      "sha256": "e11f7109c88358a381f7fa022da0f9bae6275958be286124c4655a3fb417b50e",
+      "size": 2760
+    },
+    "config/joint_limits.yaml": {
+      "sha256": "18809eecb099fbe0766b22861036ee322cbac1ea2bf5a84f901954d15e2f036c",
+      "size": 2711
+    }
+  },
+  "shared_calibration": {
+    "source_side": "right",
+    "left_alias": {
+      "schema_version": 1,
+      "robot_model": "alohamini2pro",
+      "side": "left",
+      "inherits": "hardware_joint_map_right.yaml",
+      "calibration_source_side": "right",
+      "note": "Left and right use the same single-arm measurement; only the logical side/prefix differs."
+    },
+    "ticks_per_revolution": 4096,
+    "joints": {
+      "shoulder_pan": {
+        "id": 1,
+        "model": "sts3250",
+        "zero_tick": null,
+        "reference_tick": 2027,
+        "reference_q_rad": 0.0,
+        "sign": 1,
+        "positive_direction_sample_tick": 2272,
+        "positive_direction_delta_tick": 245,
+        "safe_min_tick": 567,
+        "safe_q_min_rad": -2.2396119503130363,
+        "safe_max_tick": 3418,
+        "safe_q_max_rad": 2.133767275948927
+      },
+      "shoulder_lift": {
+        "id": 2,
+        "model": "sts3095",
+        "zero_tick": null,
+        "reference_tick": 2047,
+        "reference_q_rad": -1.571,
+        "sign": -1,
+        "positive_direction_sample_tick": 1715,
+        "positive_direction_delta_tick": -332,
+        "safe_max_tick": 918,
+        "safe_q_max_rad": 0.160864309522889,
+        "safe_min_tick": 3171,
+        "safe_q_min_rad": -3.2951944055834606
+      },
+      "elbow_flex": {
+        "id": 3,
+        "model": "sts3095",
+        "zero_tick": null,
+        "reference_tick": 1979,
+        "reference_q_rad": 1.571,
+        "sign": -1,
+        "positive_direction_sample_tick": 1646,
+        "positive_direction_delta_tick": -333,
+        "safe_min_tick": 3049,
+        "safe_q_min_rad": -0.0703594430376362,
+        "safe_max_tick": 904,
+        "safe_q_max_rad": 3.220029346977064
+      },
+      "wrist_flex": {
+        "id": 4,
+        "model": "sts3250",
+        "zero_tick": null,
+        "reference_tick": 2089,
+        "reference_q_rad": 0.0,
+        "sign": 1,
+        "positive_direction_sample_tick": 2325,
+        "positive_direction_delta_tick": 236,
+        "safe_max_tick": 3056,
+        "safe_q_max_rad": 1.483359421885415,
+        "safe_min_tick": 1016,
+        "safe_q_min_rad": -1.6459613854012929
+      },
+      "wrist_yaw": {
+        "id": 5,
+        "model": "sts3250",
+        "zero_tick": null,
+        "reference_tick": 2221,
+        "reference_q_rad": 0.0,
+        "sign": 1,
+        "positive_direction_sample_tick": 2709,
+        "positive_direction_delta_tick": 488,
+        "safe_min_tick": 1409,
+        "safe_q_min_rad": -1.2455923997631406,
+        "safe_max_tick": 2998,
+        "safe_q_max_rad": 1.191903072187143
+      },
+      "wrist_roll": {
+        "id": 6,
+        "model": "sts3250",
+        "zero_tick": null,
+        "reference_tick": 2057,
+        "reference_q_rad": 0.0,
+        "sign": -1,
+        "positive_direction_sample_tick": 1702,
+        "positive_direction_delta_tick": -355
+      },
+      "gripper": {
+        "id": 7,
+        "model": "sts3250",
+        "closed_tick": 2048,
+        "open_tick": 3432,
+        "reference_tick": 2048,
+        "reference_q_rad": 0.32,
+        "sign": -1,
+        "joint_per_encoder_ratio": 1.0,
+        "urdf_closed_rad": 0.32,
+        "urdf_open_rad": -1.8030294104
+      }
+    }
+  },
+  "joint_order": [
+    "shoulder_pan",
+    "shoulder_lift",
+    "elbow_flex",
+    "wrist_flex",
+    "wrist_yaw",
+    "wrist_roll"
+  ],
+  "standard_dh": {
+    "convention": "Rz(theta) * Tz(d) * Tx(a) * Rx(alpha)",
+    "rows": [
+      {
+        "joint": "shoulder_pan",
+        "a": 0.029035,
+        "alpha": -1.5708,
+        "d": -0.058223,
+        "theta_offset": 0.0
+      },
+      {
+        "joint": "shoulder_lift",
+        "a": 0.134948030824,
+        "alpha": 0.0,
+        "d": 0.0,
+        "theta_offset": 2.831563965941
+      },
+      {
+        "joint": "elbow_flex",
+        "a": 0.198454362128,
+        "alpha": -3.14159265359,
+        "d": 0.0,
+        "theta_offset": -2.847712982225
+      },
+      {
+        "joint": "wrist_flex",
+        "a": 0.028129518747,
+        "alpha": -1.570796326795,
+        "d": -0.000966380385,
+        "theta_offset": -0.016148940304
+      },
+      {
+        "joint": "wrist_yaw",
+        "a": 0.0,
+        "alpha": 1.570796250191,
+        "d": 0.023322814499,
+        "theta_offset": 1.570796326795
+      },
+      {
+        "joint": "wrist_roll",
+        "a": 0.0,
+        "alpha": 0.0,
+        "d": 0.0,
+        "theta_offset": 0.0
+      }
+    ],
+    "base_transform": [
+      [
+        0.0,
+        -1.0,
+        0.0,
+        0.0
+      ],
+      [
+        -1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        -1.0,
+        0.062556
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "tool_transform": [
+      [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0,
+        0.060992744083
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ]
+  },
+  "tcp": {
+    "rotation_fixed_tool": [
+      [
+        0,
+        1,
+        0
+      ],
+      [
+        0,
+        0,
+        1
+      ],
+      [
+        1,
+        0,
+        0
+      ]
+    ],
+    "translation_tool_m": [
+      0.09999,
+      -0.004,
+      0.00126
+    ],
+    "translation_fixed_m": [
+      -0.004,
+      0.00126,
+      0.09999
+    ]
+  },
+  "frames": {
+    "left": {
+      "base": "left_Base",
+      "fixed_jaw": "left_Fixed_Jaw",
+      "tcp": "left_tcp"
+    },
+    "right": {
+      "base": "right_Base",
+      "fixed_jaw": "right_Fixed_Jaw",
+      "tcp": "right_tcp"
+    }
+  }
+}

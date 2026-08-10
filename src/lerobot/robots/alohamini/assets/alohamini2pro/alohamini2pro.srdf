@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<robot name="alohamini2pro">
+  <!--
+    Adjacent and near-adjacent meshes in the supplied CAD overlap slightly.
+    Disable only these known internal pairs; collisions with the scene remain on.
+  -->
+  <disable_collisions link1="base_link" link2="chest_camera" reason="default"/>
+  <disable_collisions link1="base_link" link2="left_Base" reason="default"/>
+  <disable_collisions link1="base_link" link2="right_Base" reason="default"/>
+
+  <disable_collisions link1="left_Lower_Arm" link2="left_wrist_yaw" reason="default"/>
+  <disable_collisions link1="left_wrist_yaw" link2="left_Moving_Jaw" reason="default"/>
+  <disable_collisions link1="left_wrist_yaw" link2="left_camera" reason="default"/>
+
+  <disable_collisions link1="right_Lower_Arm" link2="right_wrist_yaw" reason="default"/>
+  <disable_collisions link1="right_wrist_yaw" link2="right_Moving_Jaw" reason="default"/>
+  <disable_collisions link1="right_wrist_yaw" link2="right_camera" reason="default"/>
+</robot>

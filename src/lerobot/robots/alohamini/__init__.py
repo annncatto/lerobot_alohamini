@@ -14,13 +14,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .alohamini import AlohaMini
-from .alohamini_client import AlohaMiniClient
-from .config_alohamini import (
-    AlohaMiniClientConfig,
-    AlohaMiniConfig,
-    AlohaMiniHostConfig,
-)
+# Keep the existing eager registration behavior in a full LeRobot environment.
+# ROS 2's system Python can still import the dependency-free ``kinematics``
+# subpackage without installing the complete camera/hardware stack.
+try:
+    from .alohamini import AlohaMini
+    from .alohamini_client import AlohaMiniClient
+    from .config_alohamini import (
+        AlohaMiniClientConfig,
+        AlohaMiniConfig,
+        AlohaMiniHostConfig,
+    )
+except ModuleNotFoundError as error:
+    if error.name != "draccus":
+        raise
 
 __all__ = [
     "AlohaMini",

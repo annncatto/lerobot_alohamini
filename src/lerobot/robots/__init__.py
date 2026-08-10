@@ -14,8 +14,32 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .config import RobotConfig
-from .robot import Robot
-from .utils import make_robot_from_config
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .config import RobotConfig
+    from .robot import Robot
+    from .utils import make_robot_from_config
 
 __all__ = ["Robot", "RobotConfig", "make_robot_from_config"]
+
+
+def __getattr__(name: str) -> Any:
+    """Load hardware abstractions only when their public exports are requested.
+
+    Lightweight subpackages such as ``lerobot.robots.alohamini.kinematics`` do
+    not require the configuration and hardware dependency stack.
+    """
+    if name == "RobotConfig":
+        from .config import RobotConfig
+
+        return RobotConfig
+    if name == "Robot":
+        from .robot import Robot
+
+        return Robot
+    if name == "make_robot_from_config":
+        from .utils import make_robot_from_config
+
+        return make_robot_from_config
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
