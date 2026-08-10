@@ -68,7 +68,8 @@ LeRobot policy / teleop / ROS PoseStamped
 
 ### 3.1 IK 求解器
 
-优先复用 LeRobot 的 `RobotKinematics`/Placo 数值 IK，并增加 AlohaMini 双臂参数化包装层：
+P1 已实现 ROS 无关的纯 NumPy 阻尼最小二乘（DLS）数值 IK，并增加 AlohaMini 双臂
+参数化包装层。它不依赖 ROS、Placo 或训练栈，适合系统 Python 下的 dry-run 节点：
 
 - 关节顺序固定为 RoboTwin `right_arm_kinematics.yaml` 的六关节顺序，左臂只替换
   joint/frame 前缀；
@@ -77,17 +78,20 @@ LeRobot policy / teleop / ROS PoseStamped
 - 返回结构化结果：成功状态、位置误差、姿态误差、限位余量和求解耗时；
 - 求解失败、NaN、越限、残差超限时不发布硬件命令。
 
-DH/POE 的用途是提供独立 FK/Jacobian 校验基准，不作为第一版生产 IK 的唯一实现。
-后续需要碰撞感知轨迹规划时再接 MoveIt 2 或 cuRobo，而不是把碰撞规划混入第一版
-单点 IK。
+LeRobot `RobotKinematics`/Placo 作为独立 FK 校验后端：当前生成的左右臂 URDF/TCP
+与 DLS 核心在测试姿态上达到约 `5e-13 m` 位置差、`1.1e-11` 旋转矩阵差。
+Placo 不作为 ROS dry-run 的运行时硬依赖。后续需要碰撞感知轨迹规划时再接 MoveIt 2
+或 cuRobo，而不是把碰撞规划混入第一版单点 IK。
 
 ### 3.2 ROS 版本与依赖
 
-当前开发机是 Ubuntu 22.04，目标 ROS 版本应为 ROS 2 Humble。当前环境状态：
+当前开发机是 Ubuntu 22.04，目标 ROS 版本为 ROS 2 Humble。2026-08-10 的环境状态：
 
-- 尚未安装 `ros2`/`rclpy`；
-- 当前 Conda 环境的 Placo 因缺少 `liburdfdom_sensor.so.4.0` 无法导入；
-- `pyproject.toml` 已对 Placo/urdfdom ABI 给出版本约束，但现有环境需要重建或修复。
+- 已从 ROS 官方 APT 源安装 Humble ros-base、colcon、RViz、消息包和状态发布器；
+- ROS 使用系统 `/usr/bin/python3`（3.10），避免被 Conda base Python 3.13 污染；
+- LeRobot Conda 环境已将 `cmeel-urdfdom` 固定到 4.0.1、`cmeel-tinyxml2` 固定到
+  10.0.0，`placo 0.9.15` 和 Pinocchio 均可导入；
+- `pyproject.toml`/`uv.lock` 已包含相同 ABI 约束，新环境应通过锁文件重建。
 
 依赖准备必须先在独立环境完成，不能为了 ROS 修改现有训练环境。建议：
 
@@ -130,20 +134,18 @@ LeRobot motor key
 ```text
 src/lerobot/robots/alohamini/kinematics/
 ├── joint_mapping.py          # LeRobot/tick/URDF/ROS 单位与名称转换
-├── solver.py                 # ROS 无关的双臂参数化 IK 包装与结果类型
-└── safety.py                 # 残差、限位、奇异性和连续性检查
+└── solver.py                 # 双臂 DLS IK、限位、残差、奇异值和结构化结果
 
 ros2/
-├── alohamini_description/    # URDF/SRDF/mesh、robot_state_publisher launch
+├── alohamini_description/    # mesh-free URDF/SRDF、robot_state_publisher launch
 ├── alohamini_kinematics/     # PoseStamped → JointTrajectory
-└── alohamini_bridge/         # LeRobot Robot 硬件所有者与 ROS 标准接口
+└── alohamini_bridge/         # P3 再实现：LeRobot Robot 硬件所有者
 
 scripts/
-└── sync_alohamini_ros_assets.py  # 从 RoboTwin 按 manifest/hash 同步资产
+└── sync_alohamini_kinematics_assets.py  # 从 RoboTwin 按 manifest/hash 同步资产
 
 tests/
-├── robots/test_alohamini_joint_mapping.py
-├── model/test_alohamini_kinematics.py
+├── robots/test_alohamini_kinematics.py
 └── ros2/test_alohamini_ros_contract.py
 ```
 
@@ -162,7 +164,8 @@ RoboTwin 保持资产真源。LeRobot 分支中的 ROS description 必须由同�
 ### 输出
 
 - `/joint_states`：`sensor_msgs/JointState`，位置单位 rad；
-- `/alohamini/{left,right}/joint_trajectory`：`trajectory_msgs/JointTrajectory`；
+- `/alohamini/{left,right}/candidate_joint_trajectory`：`trajectory_msgs/JointTrajectory`，P2
+  阶段仅供检查，不连接执行器；
 - `/tf`、`/tf_static`：由 `robot_state_publisher` 发布；
 - `/diagnostics`：映射状态、IK 残差、限位余量、求解耗时和拒绝原因。
 
