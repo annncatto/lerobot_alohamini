@@ -21,6 +21,7 @@ def test_generated_kinematics_asset_manifest_is_complete():
         "alohamini2pro_kinematic.urdf",
         "alohamini2pro_left_kinematic.urdf",
         "alohamini2pro_right_kinematic.urdf",
+        "alohamini2pro_moveit.urdf",
         "alohamini2pro.srdf",
     } <= {path.name for path in DEFAULT_OUTPUT_ROOT.iterdir()}
 
@@ -45,6 +46,34 @@ def test_generated_arm_urdfs_have_symmetric_joint_trees_and_tcp():
             if joint.get("name") != f"{side}_tcp_joint"
         ]
     assert signatures["left"] == signatures["right"]
+
+
+def test_moveit_asset_keeps_collision_geometry_and_semantic_groups():
+    urdf = ET.parse(DEFAULT_OUTPUT_ROOT / "alohamini2pro_moveit.urdf").getroot()
+    assert urdf.get("name") == "alohamini2pro_moveit"
+    assert urdf.find("link[@name='root']/inertial") is None
+    assert urdf.find("material[@name='white']") is not None
+    meshes = urdf.findall(".//mesh")
+    assert meshes
+    assert all(
+        mesh.get("filename", "").startswith("package://alohamini_description/alohamini2pro/")
+        for mesh in meshes
+    )
+    assert urdf.find("joint[@name='left_tcp_joint']") is not None
+    assert urdf.find("joint[@name='right_tcp_joint']") is not None
+    collision_meshes = urdf.findall(".//collision/geometry/mesh")
+    assert collision_meshes
+    assert all(
+        "collision_meshes/" in mesh.get("filename", "")
+        or mesh.get("filename", "").endswith("/base_link.STL")
+        for mesh in collision_meshes
+    )
+    assert urdf.findall(".//collision/geometry/box")
+
+    srdf = ET.parse(DEFAULT_OUTPUT_ROOT / "alohamini2pro.srdf").getroot()
+    assert srdf.get("name") == urdf.get("name")
+    groups = {group.get("name") for group in srdf.findall("group")}
+    assert {"left_arm", "right_arm", "dual_arms", "left_gripper", "right_gripper"} <= groups
 
 
 def test_single_measured_calibration_is_identical_for_both_logical_sides():
@@ -75,6 +104,19 @@ def test_encoder_and_urdf_mapping_round_trip_within_one_tick():
             tick = mapping.urdf_to_raw_tick(joint, q_rad)
             recovered = mapping.raw_tick_to_urdf(joint, tick, near_q_rad=q_rad)
             assert abs(recovered - q_rad) <= one_tick_rad * calibration.joint_per_encoder_ratio
+
+
+def test_shoulder_pan_positive_urdf_direction_decreases_raw_ticks():
+    mapping = AlohaMiniJointMapping()
+    calibration = mapping.calibration("shoulder_pan")
+    one_tick_rad = 2.0 * np.pi / mapping.ticks_per_revolution
+
+    assert calibration.sign == -1
+    assert mapping.urdf_to_raw_tick("shoulder_pan", one_tick_rad) == (
+        calibration.reference_tick - 1
+    ) % mapping.ticks_per_revolution
+    assert calibration.lower_rad == pytest.approx(-2.133767275948927)
+    assert calibration.upper_rad == pytest.approx(2.2396119503130363)
 
 
 @pytest.mark.parametrize("drive_mode", [0, 1])

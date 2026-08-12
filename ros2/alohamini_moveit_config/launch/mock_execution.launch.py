@@ -1,0 +1,80 @@
+"""MoveIt execution against the mock-only trajectory bridge."""
+
+from pathlib import Path
+
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+from moveit_configs_utils import MoveItConfigsBuilder
+
+
+def generate_launch_description() -> LaunchDescription:
+    description = Path(get_package_share_directory("alohamini_description")) / "alohamini2pro"
+    package = Path(get_package_share_directory("alohamini_moveit_config"))
+    moveit_config = (
+        MoveItConfigsBuilder("alohamini2pro", package_name="alohamini_moveit_config")
+        .robot_description(file_path=str(description / "alohamini2pro_moveit.urdf"))
+        .robot_description_semantic(file_path=str(description / "alohamini2pro.srdf"))
+        .robot_description_kinematics()
+        .joint_limits()
+        .planning_pipelines(default_planning_pipeline="ompl", pipelines=["ompl"])
+        .trajectory_execution(file_path="config/moveit_controllers.yaml", moveit_manage_controllers=False)
+        .planning_scene_monitor(
+            publish_planning_scene=True,
+            publish_geometry_updates=True,
+            publish_state_updates=True,
+            publish_transforms_updates=True,
+            publish_robot_description=True,
+            publish_robot_description_semantic=True,
+        )
+        .to_moveit_configs()
+    )
+    move_group_parameters = [
+        moveit_config.to_dict(),
+        {
+            "allow_trajectory_execution": True,
+            "publish_robot_description_semantic": True,
+            "monitor_dynamics": False,
+        },
+    ]
+
+    return LaunchDescription(
+        [
+            DeclareLaunchArgument("use_rviz", default_value="true"),
+            Node(
+                package="alohamini_control",
+                executable="mock_trajectory_bridge",
+                output="screen",
+            ),
+            Node(
+                package="robot_state_publisher",
+                executable="robot_state_publisher",
+                parameters=[moveit_config.robot_description],
+                output="screen",
+            ),
+            Node(
+                package="moveit_ros_move_group",
+                executable="move_group",
+                output="screen",
+                parameters=move_group_parameters,
+            ),
+            Node(
+                package="rviz2",
+                executable="rviz2",
+                name="moveit_rviz",
+                output="log",
+                arguments=["-d", str(package / "config/moveit.rviz")],
+                parameters=[
+                    moveit_config.robot_description,
+                    moveit_config.robot_description_semantic,
+                    moveit_config.robot_description_kinematics,
+                    moveit_config.planning_pipelines,
+                    moveit_config.joint_limits,
+                ],
+                condition=IfCondition(LaunchConfiguration("use_rviz")),
+            ),
+        ]
+    )

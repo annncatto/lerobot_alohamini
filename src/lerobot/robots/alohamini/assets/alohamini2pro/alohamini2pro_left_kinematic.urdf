@@ -23,7 +23,7 @@
     <parent link="left_Base" />
     <child link="left_Rotation_Pitch" />
     <axis xyz="0 0 -1" />
-    <limit lower="-2.23961195031" upper="2.13376727595" effort="1.57" velocity="4.2" />
+    <limit lower="-2.13376727595" upper="2.23961195031" effort="1.57" velocity="4.2" />
   </joint>
   <joint name="left_shoulder_lift" type="revolute">
     <origin xyz="0 -0.029035 0.058223" rpy="0 1.5708 0" />

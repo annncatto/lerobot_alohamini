@@ -136,6 +136,107 @@ def _strip_geometry(link: ET.Element) -> None:
             link.remove(child)
 
 
+def _use_description_package_meshes(robot: ET.Element) -> None:
+    """Make canonical relative mesh paths portable after ROS installation."""
+    prefix = "package://alohamini_description/alohamini2pro/"
+    for mesh in robot.findall(".//mesh"):
+        filename = mesh.get("filename")
+        if filename is None:
+            continue
+        if filename.startswith("../"):
+            mesh.set("filename", prefix + filename.removeprefix("../"))
+
+
+def _rpy_matrix(rpy: np.ndarray) -> np.ndarray:
+    roll, pitch, yaw = rpy
+    cr, sr = math.cos(roll), math.sin(roll)
+    cp, sp = math.cos(pitch), math.sin(pitch)
+    cy, sy = math.cos(yaw), math.sin(yaw)
+    return np.array(
+        [
+            [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+            [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+            [-sp, cp * sr, cp * cr],
+        ],
+        dtype=float,
+    )
+
+
+def _stl_bounds(path: Path) -> tuple[np.ndarray, np.ndarray]:
+    """Read binary or ASCII STL bounds without adding a mesh dependency."""
+    size = path.stat().st_size
+    with path.open("rb") as file:
+        header = file.read(84)
+    if len(header) == 84:
+        triangle_count = int.from_bytes(header[80:84], byteorder="little")
+        if 84 + triangle_count * 50 == size:
+            triangle_dtype = np.dtype(
+                [("normal", "<f4", (3,)), ("vertices", "<f4", (3, 3)), ("attribute", "<u2")]
+            )
+            triangles = np.fromfile(path, dtype=triangle_dtype, offset=84, count=triangle_count)
+            vertices = triangles["vertices"].reshape(-1, 3)
+            return vertices.min(axis=0).astype(float), vertices.max(axis=0).astype(float)
+
+    vertices = []
+    with path.open(encoding="utf-8", errors="ignore") as file:
+        for line in file:
+            fields = line.strip().split()
+            if len(fields) == 4 and fields[0].lower() == "vertex":
+                vertices.append([float(value) for value in fields[1:]])
+    if not vertices:
+        raise ValueError(f"STL contains no vertices: {path}")
+    array = np.asarray(vertices, dtype=float)
+    return array.min(axis=0), array.max(axis=0)
+
+
+def _replace_detailed_collision_meshes(
+    robot: ET.Element,
+    source_asset_root: Path,
+    *,
+    padding_m: float = 0.002,
+) -> None:
+    """Replace high-poly CAD collision meshes with conservative local AABBs.
+
+    The small Moving_Jaw VHACD pieces are retained.  Visual meshes are not
+    changed, so RViz still displays the audited CAD geometry.
+    """
+    for collision in robot.findall(".//collision"):
+        geometry = collision.find("geometry")
+        mesh = None if geometry is None else geometry.find("mesh")
+        if geometry is None or mesh is None:
+            continue
+        filename = mesh.get("filename")
+        if filename is None or "alohamini2pro_meshes/" not in filename:
+            continue
+        # The base mesh contains large intentional voids around the arm mount;
+        # one AABB would fill those voids and falsely collide with the shoulder.
+        # Keeping this single 80k-triangle mesh is still fast after the other
+        # detailed collision meshes have been simplified.
+        if filename.endswith("/base_link.STL"):
+            continue
+        mesh_path = (source_asset_root / "urdf" / filename).resolve()
+        lower, upper = _stl_bounds(mesh_path)
+        scale = np.asarray([float(value) for value in mesh.get("scale", "1 1 1").split()])
+        if scale.shape != (3,):
+            raise ValueError(f"Invalid mesh scale in {mesh_path}: {scale}")
+        scaled_lower = np.minimum(lower * scale, upper * scale)
+        scaled_upper = np.maximum(lower * scale, upper * scale)
+        center = 0.5 * (scaled_lower + scaled_upper)
+        box_size = scaled_upper - scaled_lower + 2.0 * padding_m
+
+        origin = collision.find("origin")
+        if origin is None:
+            origin = ET.Element("origin", {"xyz": "0 0 0", "rpy": "0 0 0"})
+            collision.insert(0, origin)
+        xyz = np.asarray([float(value) for value in origin.get("xyz", "0 0 0").split()])
+        rpy = np.asarray([float(value) for value in origin.get("rpy", "0 0 0").split()])
+        xyz = xyz + _rpy_matrix(rpy) @ center
+        origin.set("xyz", " ".join(f"{value:.12g}" for value in xyz))
+        origin.set("rpy", " ".join(f"{value:.12g}" for value in rpy))
+        geometry.remove(mesh)
+        ET.SubElement(geometry, "box", {"size": " ".join(f"{value:.12g}" for value in box_size)})
+
+
 def _matrix_to_rpy(matrix: np.ndarray) -> tuple[float, float, float]:
     sy = math.hypot(float(matrix[0, 0]), float(matrix[1, 0]))
     if sy > 1e-9:
@@ -214,6 +315,40 @@ def build_full_kinematic_urdf(
     for side in ("left", "right"):
         _add_tcp_frame(robot, side, tool_frames)
     return _serialize_urdf(robot)
+
+
+def build_moveit_urdf(
+    source_root: ET.Element,
+    source_asset_root: Path,
+    calibration: dict[str, Any],
+    tool_frames: dict[str, Any],
+) -> bytes:
+    """Build the full geometry-bearing description used for collision planning."""
+    robot = copy.deepcopy(source_root)
+    robot.set("name", "alohamini2pro_moveit")
+    root_link = robot.find("link[@name='root']")
+    if root_link is not None:
+        inertial = root_link.find("inertial")
+        if inertial is not None:
+            root_link.remove(inertial)
+    if robot.find("material[@name='white']") is None:
+        material = ET.Element("material", {"name": "white"})
+        ET.SubElement(material, "color", {"rgba": "1 1 1 1"})
+        robot.insert(0, material)
+    _replace_detailed_collision_meshes(robot, source_asset_root)
+    _use_description_package_meshes(robot)
+    for joint in robot.findall("joint"):
+        _apply_shared_limits(joint, calibration)
+    for side in ("left", "right"):
+        _add_tcp_frame(robot, side, tool_frames)
+    return _serialize_urdf(robot)
+
+
+def build_moveit_srdf(source_root: Path) -> bytes:
+    robot = ET.parse(source_root / "urdf/alohamini2pro.srdf").getroot()
+    robot.set("name", "alohamini2pro_moveit")
+    ET.indent(robot, space="  ")
+    return ET.tostring(robot, encoding="utf-8", xml_declaration=True) + b"\n"
 
 
 def build_arm_kinematic_urdf(
@@ -306,13 +441,16 @@ def generated_files(source_root: Path) -> dict[str, bytes]:
     return {
         "kinematics.json": build_kinematics_json(source_root),
         "alohamini2pro_kinematic.urdf": build_full_kinematic_urdf(source_xml, calibration, tool_frames),
+        "alohamini2pro_moveit.urdf": build_moveit_urdf(
+            source_xml, source_root, calibration, tool_frames
+        ),
         **{
             f"alohamini2pro_{side}_kinematic.urdf": build_arm_kinematic_urdf(
                 source_xml, side, calibration, tool_frames
             )
             for side in ("left", "right")
         },
-        "alohamini2pro.srdf": (source_root / "urdf/alohamini2pro.srdf").read_bytes(),
+        "alohamini2pro.srdf": build_moveit_srdf(source_root),
     }
 
 
