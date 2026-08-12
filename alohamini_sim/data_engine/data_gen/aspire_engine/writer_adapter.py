@@ -2,7 +2,7 @@
 
 The existing writer in intern_engine/writers/lerobot_v21.py is intentionally fixed
 to a 12-D arm/gripper schema. AlohaMini Pro execution traces here use the full
-18-D qpos state and 16-D controller action, so this adapter mirrors the writer's
+18-D qpos state and 18-D controller action, so this adapter mirrors the writer's
 directory and metadata shape without modifying the validated writer.
 """
 
@@ -29,20 +29,20 @@ STATE_NAMES = [
     "root_y_axis_joint",
     "root_z_rotation_joint",
     "vertical_move",
-    "left_joint1",
-    "right_joint1",
-    "left_joint2",
-    "right_joint2",
-    "left_joint3",
-    "right_joint3",
-    "left_joint4",
-    "right_joint4",
-    "left_joint5",
-    "right_joint5",
-    "left_finger_joint1",
-    "left_finger_joint2",
-    "right_finger_joint1",
-    "right_finger_joint2",
+    "left_shoulder_pan",
+    "right_shoulder_pan",
+    "left_shoulder_lift",
+    "right_shoulder_lift",
+    "left_elbow_flex",
+    "right_elbow_flex",
+    "left_wrist_flex",
+    "right_wrist_flex",
+    "left_wrist_yaw_joint",
+    "right_wrist_yaw_joint",
+    "left_wrist_roll",
+    "right_wrist_roll",
+    "left_gripper",
+    "right_gripper",
 ]
 
 ACTION_NAMES = [
@@ -50,17 +50,19 @@ ACTION_NAMES = [
     "root_y_axis_joint_target",
     "root_z_rotation_joint_target",
     "vertical_move_target",
-    "left_joint1_target",
-    "left_joint2_target",
-    "left_joint3_target",
-    "left_joint4_target",
-    "left_joint5_target",
+    "left_shoulder_pan_target",
+    "left_shoulder_lift_target",
+    "left_elbow_flex_target",
+    "left_wrist_flex_target",
+    "left_wrist_yaw_joint_target",
+    "left_wrist_roll_target",
     "left_gripper_target",
-    "right_joint1_target",
-    "right_joint2_target",
-    "right_joint3_target",
-    "right_joint4_target",
-    "right_joint5_target",
+    "right_shoulder_pan_target",
+    "right_shoulder_lift_target",
+    "right_elbow_flex_target",
+    "right_wrist_flex_target",
+    "right_wrist_yaw_joint_target",
+    "right_wrist_roll_target",
     "right_gripper_target",
 ]
 
@@ -72,7 +74,7 @@ class AspireStateWriter:
         *,
         fps: int = 20,
         dataset_name: str = "aloha_mini_pro_aspire_state",
-        robot_type: str = "aloha_mini_pro_v2",
+        robot_type: str = "alohamini2pro_sim",
         overwrite: bool = True,
     ) -> None:
         self.root = Path(output_dir)
@@ -100,10 +102,12 @@ class AspireStateWriter:
         steps = list(episode.get("steps", []))
         states = np.asarray([step["qpos"] for step in steps], dtype=np.float32)
         actions = np.asarray([step["action"] for step in steps], dtype=np.float32)
-        if states.ndim != 2 or states.shape[1] != 18:
-            raise ValueError(f"observation.state must be [T,18], got {states.shape}")
-        if actions.ndim != 2 or actions.shape[1] != 16:
-            raise ValueError(f"action must be [T,16], got {actions.shape}")
+        if states.ndim != 2 or states.shape[1] != len(STATE_NAMES):
+            raise ValueError(
+                f"observation.state must be [T,{len(STATE_NAMES)}], got {states.shape}"
+            )
+        if actions.ndim != 2 or actions.shape[1] != len(ACTION_NAMES):
+            raise ValueError(f"action must be [T,{len(ACTION_NAMES)}], got {actions.shape}")
         n = states.shape[0]
         if n == 0:
             raise ValueError("cannot write empty episode")
@@ -175,8 +179,12 @@ class AspireStateWriter:
     ) -> None:
         n = states.shape[0]
         columns: dict[str, Any] = {
-            "observation.state": pa.array(states.tolist(), type=pa.list_(pa.float32(), 18)),
-            "action": pa.array(actions.tolist(), type=pa.list_(pa.float32(), 16)),
+            "observation.state": pa.array(
+                states.tolist(), type=pa.list_(pa.float32(), len(STATE_NAMES))
+            ),
+            "action": pa.array(
+                actions.tolist(), type=pa.list_(pa.float32(), len(ACTION_NAMES))
+            ),
             "episode_index": pa.array([episode_index] * n, type=pa.int64()),
             "frame_index": pa.array(list(range(n)), type=pa.int64()),
             "timestamp": pa.array(timestamps.tolist(), type=pa.float32()),
@@ -213,12 +221,12 @@ class AspireStateWriter:
             "features": {
                 "observation.state": {
                     "dtype": "float32",
-                    "shape": [18],
+                    "shape": [len(STATE_NAMES)],
                     "names": STATE_NAMES,
                 },
                 "action": {
                     "dtype": "float32",
-                    "shape": [16],
+                    "shape": [len(ACTION_NAMES)],
                     "names": ACTION_NAMES,
                 },
                 "episode_index": {"dtype": "int64", "shape": [1]},

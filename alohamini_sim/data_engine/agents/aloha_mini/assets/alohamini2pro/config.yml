@@ -1,0 +1,98 @@
+urdf_path: "./urdf/alohamini2pro.urdf"
+srdf_path: "./urdf/alohamini2pro.srdf"
+joint_stiffness: 1000
+joint_damping: 200
+gripper_stiffness: 1000
+gripper_damping: 200
+
+# Preserve inertial data from the description asset. The values still require
+# calibration, but replacing every link with 1 kg destroys the articulated
+# dynamics and hides description errors.
+preserve_urdf_mass: true
+# Passive gravity/Coriolis compensation must be applied immediately before
+# every physics step; applying it only when a new arm command arrives is not a
+# continuous controller.
+continuous_gravity_compensation: true
+
+# RoboTwin reads the global pose from the parent joint of each move_group link.
+move_group: ["left_Fixed_Jaw", "right_Fixed_Jaw"]
+ee_joints: ["left_wrist_roll", "right_wrist_roll"]
+arm_joints_name:
+  - ["left_shoulder_pan", "left_shoulder_lift", "left_elbow_flex", "left_wrist_flex", "left_wrist_yaw_joint", "left_wrist_roll"]
+  - ["right_shoulder_pan", "right_shoulder_lift", "right_elbow_flex", "right_wrist_flex", "right_wrist_yaw_joint", "right_wrist_roll"]
+gripper_name:
+  - base: "left_gripper"
+    mimic: []
+  - base: "right_gripper"
+    mimic: []
+
+# The supplied URDF models one moving jaw per gripper. These initial values map
+# normalized RoboTwin gripper commands [closed, open] to radians.
+# Distal tabletop-grasp TCP measured with a 20 mm cylindrical gauge at 100 mm
+# finger depth. Left/right results agree within numerical noise and both jaws
+# contact the visual surfaces at q=0.15 and q=0.30. The earlier 70.35 mm TCP is
+# a valid mid-pad point, but makes the 104 mm finger penetrate the tabletop
+# before reaching a low object's center.
+gripper_bias: 0.09999
+gripper_center_offset: [0.0, 0.00400, -0.00126]
+# Temporarily accepted 1:1 encoder mapping. The operator confirmed the visual
+# closed pose at q=0.32 rad. From the nominal closed tick 2048 to the measured
+# open tick 3432, 1384 output-shaft ticks give 2.1230294104 rad, hence
+# q_open=0.32-2.1230294104=-1.8030294104 rad. P3 gauge checks are still needed
+# before marking this as a final production calibration.
+gripper_scale: [0.32, -1.8030294104]
+# This is a normalized [0, 1] command, not a joint angle in radians. With the
+# temporary mapping above, command 1.0 resolves to -1.8030294104 rad.
+initial_gripper_command: 1.0
+# Collision-free powered home derived from the measured folded endpoint pose,
+# with shoulder_lift/elbow_flex/wrist_flex moved 5 degrees inward.  The encoder
+# calibration reference and the power-off contact stow pose are separate data.
+homestate:
+  - [0.0, 0.0735978469, 0.0169070196, 1.3960929593, 0.0, 0.0]
+  - [0.0, 0.0735978469, 0.0169070196, 1.3960929593, 0.0, 0.0]
+
+# Raise the arm carriage above RoboTwin's 0.74 m tabletop. At zero lift the
+# supplied home pose places both grippers inside the tabletop.
+fixed_joint_positions:
+  vertical_move: 0.20
+initialize_homestate_qpos: true
+
+# Columns are RoboTwin tool axes expressed in the Fixed_Jaw frame:
+# tool +X = Fixed_Jaw +Z (finger/approach direction),
+# tool +Y = Fixed_Jaw +X (jaw closing direction),
+# tool +Z = Fixed_Jaw +Y. This is a right-handed orthonormal rotation.
+delta_matrix: [[0, 1, 0], [0, 0, 1], [1, 0, 0]]
+# Measured rotation from the wrist_roll joint frame to the Fixed_Jaw link
+# frame. Keep this separate from delta_matrix; together they make feedback the
+# exact inverse of the planning tool->end-link conversion.
+global_trans_matrix: [[0, 0, 1], [0, 1, 0], [-1, 0, 0]]
+
+# The supplied URDF extends both arms toward local -Y. Rotate the chassis
+# 180 degrees around world Z so the arms face the table at world +Y.
+robot_pose: [[0.0, -0.58, 0.0, 0.0, 0.0, 0.0, 1.0]]
+
+# The Mini arms are shorter than the upstream Aloha arms. Tasks that support
+# embodiment workspace adaptation shift their tabletop actors toward the robot.
+task_workspace_offset: [0.0, -0.20, 0.0]
+task_min_abs_x: 0.12
+planner: "curobo"
+dual_arm: true
+rotate_lim: [0.0, 1.0]
+grasp_perfect_direction: ["front_right", "front_left"]
+# A parallel jaw grasp is invariant to a 180-degree roll about tool +X. Keep
+# both IK families and prefer the one with less joint travel, with additional
+# cost on wrist_roll to avoid the previous 140-165 degree wrist spin.
+grasp_roll_candidates: [0.0, 3.141592653589793]
+grasp_joint_travel_weights: [1.0, 1.0, 1.0, 1.0, 1.0, 3.0]
+
+static_camera_list:
+  - name: head_camera
+    type: D435
+    position: [-0.032, -0.45, 1.35]
+    forward: [0.0, 0.6, -0.8]
+    left: [-1.0, 0.0, 0.0]
+  - name: front_camera
+    type: D435
+    position: [0.0, -0.45, 0.85]
+    forward: [0.0, 1.0, -0.1]
+    left: [-1.0, 0.0, 0.0]

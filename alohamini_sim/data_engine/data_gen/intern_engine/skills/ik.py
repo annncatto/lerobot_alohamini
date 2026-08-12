@@ -8,6 +8,103 @@ from typing import Any
 import numpy as np
 
 
+def _solve_maintained_alohamini2pro_ik(
+    agent: Any,
+    target: np.ndarray,
+    approach_dir: np.ndarray,
+    jaw_dir: np.ndarray,
+    arm: str,
+    seed: np.ndarray | None,
+    lift_position: float | None,
+    shoulder_lift_seed: float | None,
+    max_iters: int,
+) -> IKResult:
+    """Use SAPIEN Pinocchio for the maintained 6-DoF asset.
+
+    The old finite-difference solver repeatedly mutates live articulation qpos;
+    that path is both slow and unsafe with the current batched SAPIEN backend.
+    """
+    import sapien
+    from scipy.spatial.transform import Rotation
+
+    robot = agent.robot
+    qpos = get_active_qpos(robot)
+    names = [joint.name for joint in robot.active_joints]
+    index = {name: i for i, name in enumerate(names)}
+    arm_names = _arm_joint_names(agent, arm)
+    arm_indices = np.asarray([index[name] for name in arm_names], dtype=int)
+    if lift_position is not None:
+        for name in getattr(agent, "lift_joint_names", []):
+            qpos[index[name]] = float(lift_position)
+    if seed is not None:
+        qpos[arm_indices] = np.asarray(seed, dtype=np.float64).reshape(len(arm_indices))
+    elif shoulder_lift_seed is not None and len(arm_indices) > 1:
+        qpos[arm_indices[1]] = float(shoulder_lift_seed)
+
+    approach = np.asarray(approach_dir, dtype=np.float64)
+    approach /= np.linalg.norm(approach) + 1e-12
+    jaw_base = np.asarray(jaw_dir, dtype=np.float64)
+    jaw_base -= approach * float(np.dot(approach, jaw_base))
+    if np.linalg.norm(jaw_base) < 1e-8:
+        fallback = np.array([0.0, 1.0, 0.0])
+        jaw_base = fallback - approach * float(np.dot(approach, fallback))
+    jaw_base /= np.linalg.norm(jaw_base) + 1e-12
+    link = agent.left_fixed_jaw if arm == "left" else agent.right_fixed_jaw
+    mask = np.zeros(len(names), dtype=bool)
+    mask[arm_indices] = True
+    lower = np.asarray(getattr(agent, "safe_arm_lower", [-np.pi] * len(arm_indices)))
+    upper = np.asarray(getattr(agent, "safe_arm_upper", [np.pi] * len(arm_indices)))
+    candidates = []
+    for jaw_sign in (1.0, -1.0):
+        jaw = jaw_sign * jaw_base
+        tool_z = np.cross(approach, jaw)
+        tool_rotation = np.column_stack((approach, jaw, tool_z))
+        fixed_rotation = tool_rotation @ np.asarray(agent.DELTA_MATRIX, dtype=np.float64).T
+        fixed_position = np.asarray(target, dtype=np.float64) - fixed_rotation @ np.asarray(
+            agent.TCP_IN_FIXED_JAW, dtype=np.float64
+        )
+        quat_xyzw = Rotation.from_matrix(fixed_rotation).as_quat()
+        target_world = sapien.Pose(
+            fixed_position,
+            [quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]],
+        )
+        target_root = robot.pose.sp.inv() * target_world
+        candidate, success, error = robot.create_pinocchio_model().compute_inverse_kinematics(
+            int(link.index.item()),
+            target_root,
+            initial_qpos=qpos,
+            active_qmask=mask,
+            max_iterations=max_iters,
+        )
+        candidate = np.asarray(candidate, dtype=np.float32)
+        arm_candidate = (candidate[arm_indices] + np.pi) % (2.0 * np.pi) - np.pi
+        violation = np.maximum(lower - arm_candidate, 0.0) + np.maximum(
+            arm_candidate - upper, 0.0
+        )
+        error_norm = float(np.linalg.norm(np.asarray(error, dtype=np.float64)))
+        candidates.append(
+            (float(np.sum(violation)) + error_norm, candidate, bool(success), error_norm)
+        )
+    _, result, success, error_norm = min(candidates, key=lambda item: item[0])
+    # Pinocchio can return an equivalent revolute solution several turns away
+    # (for example +6.25 rad). Sending that raw value through a slew limiter
+    # makes the physical joint take the long path. Normalize each arm joint to
+    # its URDF interval before it becomes a controller target.
+    normalized = (result[arm_indices] + np.pi) % (2.0 * np.pi) - np.pi
+    result[arm_indices] = np.clip(normalized, lower, upper)
+    return IKResult(
+        arm=arm,
+        target=np.asarray(target, dtype=np.float32),
+        qpos=result,
+        arm_qpos=result[arm_indices],
+        success=bool(success),
+        error=error_norm,
+        iterations=max_iters,
+        wrist_roll=float(result[arm_indices[-1]]),
+        wrist_roll_score=error_norm,
+    )
+
+
 @dataclass
 class IKResult:
     arm: str
@@ -297,6 +394,21 @@ def solve_arm_ik_full_pose(
     tool roll, so position-then-wrist_roll (the 5-DOF trick) throws the TCP off target.
     Residual = [pos(3); w*(approach_des - approach_cur)(3); w*(jaw_des - jaw_cur)(3)].
     """
+    env_unwrapped = getattr(env, "unwrapped", env)
+    agent = env_unwrapped.agent
+    if hasattr(agent, "DELTA_MATRIX") and hasattr(agent, "TCP_IN_FIXED_JAW"):
+        return _solve_maintained_alohamini2pro_ik(
+            agent,
+            target,
+            approach_dir,
+            jaw_dir,
+            arm,
+            seed,
+            lift_position,
+            shoulder_lift_seed,
+            max_iters,
+        )
+
     target = np.asarray(target, dtype=np.float64).reshape(3)
     use_appr = approach_dir is not None
     a_des = None
@@ -306,8 +418,6 @@ def solve_arm_ik_full_pose(
     j_des = np.asarray(jaw_dir, np.float64).reshape(3)
     j_des = j_des / (np.linalg.norm(j_des) + 1e-12)
 
-    env_unwrapped = getattr(env, "unwrapped", env)
-    agent = env_unwrapped.agent
     robot = agent.robot
     qpos0 = get_active_qpos(robot)
     names = [joint.name for joint in robot.active_joints]

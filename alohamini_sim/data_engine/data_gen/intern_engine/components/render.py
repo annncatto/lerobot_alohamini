@@ -74,16 +74,16 @@ class ManiSkillRenderer:
         names = [joint.name for joint in robot.active_joints]
         index = {name: i for i, name in enumerate(names)}
         agent = env.unwrapped.agent
-        left = self._named_values(qpos, index, getattr(agent, "left_arm_joint_names", []), 5)
-        right = self._named_values(qpos, index, getattr(agent, "right_arm_joint_names", []), 5)
+        arm_dof = len(getattr(agent, "left_arm_joint_names", [])) or 5
+        left = self._named_values(qpos, index, getattr(agent, "left_arm_joint_names", []), arm_dof)
+        right = self._named_values(qpos, index, getattr(agent, "right_arm_joint_names", []), arm_dof)
         left_grip = self._named_values(
             qpos, index, getattr(agent, "left_gripper_joint_names", []), 1
         )
         right_grip = self._named_values(
             qpos, index, getattr(agent, "right_gripper_joint_names", []), 1
         )
-        # AlohaMini is natively 5-DOF per SO100 arm. Keep this parameterized so a
-        # later 6-DOF Pro arm can extend the feature layout deliberately.
+        # Preserve the active embodiment's actual arm DOF.
         return np.concatenate([left, left_grip, right, right_grip]).astype(np.float32)
 
     def _named_values(

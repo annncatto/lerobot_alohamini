@@ -112,13 +112,14 @@ class BaseSkill(ABC):
         self.last_info = list(info) if info is not None else [{} for _ in phases]
 
     def validate_actions(self, actions: list[np.ndarray]) -> list[np.ndarray]:
+        expected_dim = int(getattr(self, "_layout", {}).get("dim", self.action_dim))
         out: list[np.ndarray] = []
         for action in actions:
             arr = np.asarray(action, dtype=np.float32).reshape(-1)
-            if arr.size != self.action_dim:
+            if arr.size != expected_dim:
                 raise ValueError(
                     f"{self.__class__.__name__} emitted {arr.size}-D action; "
-                    f"expected {self.action_dim}."
+                    f"expected {expected_dim}."
                 )
             out.append(arr)
         return out

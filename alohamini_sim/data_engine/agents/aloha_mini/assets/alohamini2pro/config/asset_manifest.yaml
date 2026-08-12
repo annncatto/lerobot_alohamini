@@ -1,0 +1,32 @@
+schema_version: 1
+asset_name: alohamini2pro
+status: cad_export_under_calibration
+
+source:
+  archive_name: alohamini2pro.zip
+  original_local_path: /home/anncatto/Downloads/alohamini2pro.zip
+  sha256: 4652955eeab68dc4b64a0a7bd35a69cb0dae1e61d58f8f52e1396c7ca951e81d
+  contents:
+    urdf_files: 1
+    stl_files: 26
+
+runtime_baseline:
+  recorded_at: "2026-08-06"
+  python: 3.10.20
+  torch: 2.7.1+cu128
+  cuda_runtime: "12.8"
+  sapien: 3.0.0b1
+  curobo: 0.0.0
+
+generated_description:
+  current_runtime_urdf: ../urdf/alohamini2pro.urdf
+  xacro_source_available: false
+  note: Xacro migration waits for an exact semantic-equivalence generator test.
+
+calibration_state:
+  kinematics: false
+  hard_joint_limits: false
+  inertial_parameters: false
+  gripper_mapping: false
+  collision_geometry: false
+  camera_extrinsics: false

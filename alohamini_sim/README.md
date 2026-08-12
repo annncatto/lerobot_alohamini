@@ -34,8 +34,8 @@ alohamini_sim/
 
 1. **Planner/skills (vendored, executor-only).** `data_gen/` is a verbatim vendored copy
    of `AlohaMini/maniskill/data_gen` (aspire_engine + intern_engine + tasks.py) and
-   `agents/aloha_mini/` is the matching ManiSkill agent package (`AlohaMiniSO100V2`,
-   `AlohaMiniProV2`, `AlohaMiniProV3` — the Pro parallel-gripper variants). The original
+   `agents/aloha_mini/` contains the maintained `AlohaMini2ProSim` Agent plus the legacy
+   `AlohaMiniSO100V2`/`AlohaMiniProV2`/`AlohaMiniProV3` adapters. The original
    top-level import style (`import data_gen.aspire_engine.engine`, `import agents.aloha_mini`)
    still works: `aspire_engine/engine.py` inserts `alohamini_sim/data_engine` into
    `sys.path` (add it yourself before the first import, as
@@ -52,24 +52,53 @@ alohamini_sim/
    dependency-free on purpose (env registration happens inside the executor modules),
    and `tests/test_alohamini_sim_engine_imports.py` guards this.
 
-3. **Assets (shared robot description).** `agents/aloha_mini/assets/` holds the URDFs +
-   STL meshes the ManiSkill agents load (`aloha_mini_pro_v2.urdf`, `aloha_mini_pro_v3.urdf`,
-   `maniskill_so100_version.urdf`), resolved relative to the vendored package —
-   override with `ALOHAMINI_URDF_DIR`, with the legacy `~/.maniskill/data/robots/aloha_mini`
-   install as a final fallback. The Isaac-side robot for video2sim is separate:
+3. **Assets (runtime mirror).** The canonical description, documentation, calibration
+   notes, and asset tests live in RoboTwin at
+   `assets/embodiments/alohamini2pro/`. This directory mirrors only runtime files
+   (URDF/SRDF, meshes, YAML, and the SAPIEN adapter):
+
+   ```bash
+   python alohamini_sim/scripts/sync_alohamini2pro_asset.py --sync
+   python alohamini_sim/scripts/sync_alohamini2pro_asset.py
+   ```
+
+   The first command copies missing/changed runtime files without deletion; the second
+   is a read-only drift check. README/TODO/reference/test files are deliberately not
+   mirrored. `AlohaMini2ProSim` loads this 29-link, 18-DoF asset directly.
+   Run the headless loading/control gate in the ManiSkill environment with:
+
+   ```bash
+   conda run -n maniskill python alohamini_sim/scripts/smoke_alohamini2pro.py
+   ```
+
+   The Isaac-side robot for video2sim is separate:
    [`video2sim/assets/am2pro_parallel/alohamini2pro_parallel.urdf`](video2sim/assets/am2pro_parallel/alohamini2pro_parallel.urdf)
-   (SO-ARM101 joint naming; not interchangeable with the ManiSkill URDFs, whose
-   controllers expect `left_joint1..6` / `left_finger_joint1..2` names).
+   it must not be used as the canonical dynamics/collision description.
 
 ## The bridge
 
-`lerobot_bridge.py` converts engine episodes (per-step 18-D `qpos`, 16-D controller
+`lerobot_bridge.py` converts current engine episodes (per-step 18-D `qpos`, 18-D controller
 targets, optional per-camera uint8 RGB) into a v3.0 LeRobotDataset whose feature names
-follow the AlohaMini robot convention (`arm_left_*.pos`, `arm_right_*.pos`, `x.vel`,
+follow the AlohaMini2Pro convention (including wrist yaw, `x.vel`,
 `y.vel`, `theta.vel`, `lift_axis.height_mm`, `observation.images.<cam>`), so sim data
 can be mixed with `lerobot-record` output. See the module docstring for the exact
 per-dimension value mapping (base positions → body-frame velocities, lift → mm,
 optional gripper 0-100 scaling).
+
+The bridge selects the layout from each episode's action width: current
+`alohamini2pro_sim` episodes use 18-D actions and the HD 6-DoF feature profile;
+previously generated 16-D/5-DoF episode pickles remain readable for migration.
+
+### Current validation boundary
+
+- Asset drift check, 29-link/18-DoF loading, 16 kg runtime mass, fixed-base control,
+  current/legacy dataset conversion, and the Pinocchio IK station gate are validated.
+- The old `AlohaMiniMultiYCB-v1` scripted grasp trajectory was written for the legacy
+  gripper geometry. It now runs without the previous live-qpos finite-difference IK
+  failure, but seed 0 still pushes the Rubik's cube instead of lifting it. Do not use
+  that task to generate training data until its contact trajectory is retuned and a
+  multi-seed grasp gate passes. The maintained Agent/asset smoke test above is the
+  current acceptance gate.
 
 As a library:
 

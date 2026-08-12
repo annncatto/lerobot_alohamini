@@ -38,7 +38,7 @@ def test_writer_adapter_imports_without_mani_skill():
     had_mani_skill = "mani_skill" in sys.modules
     module = importlib.import_module("alohamini_sim.data_engine.data_gen.aspire_engine.writer_adapter")
     assert len(module.STATE_NAMES) == 18
-    assert len(module.ACTION_NAMES) == 16
+    assert len(module.ACTION_NAMES) == 18
     if not had_mani_skill:
         assert "mani_skill" not in sys.modules, "writer_adapter transitively imported mani_skill"
 
@@ -76,9 +76,9 @@ def test_engine_imports_with_mani_skill():
     # The vendored agent package must be registered and resolve its URDF to the
     # vendored in-repo assets (no ~/.maniskill install required).
     agents_pkg = importlib.import_module("agents.aloha_mini")
-    urdf_path = Path(agents_pkg.AlohaMiniProV2.urdf_path)
+    urdf_path = Path(agents_pkg.AlohaMini2ProSim.urdf_path)
     assert urdf_path.is_file(), f"Pro agent URDF not found: {urdf_path}"
 
     from mani_skill.agents.registration import REGISTERED_AGENTS
 
-    assert "aloha_mini_pro_v2" in REGISTERED_AGENTS
+    assert "alohamini2pro_sim" in REGISTERED_AGENTS

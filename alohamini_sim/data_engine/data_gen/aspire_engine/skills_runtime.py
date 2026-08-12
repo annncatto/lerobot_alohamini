@@ -30,10 +30,14 @@ V_BASE = 0.010
 V_ARM = 0.020
 V_ARM_DESCEND = 0.013
 V_LIFT = 0.0045
-CLOSE_STEPS = 32
-SETTLE = 10
+CLOSE_STEPS = 80
+SETTLE = 20
 HOLD = 22
-LIFT_HIGH = 0.16
+# The maintained asset's calibrated rest carriage is q=0.20 m. The legacy
+# runtime used q=0 as its work height, forcing the real 6-DoF arm into a
+# high-torque, fully extended posture. Keep manipulation near the measured rest.
+LIFT_START = 0.20
+LIFT_HIGH = 0.27
 PICK_BACK = 0.11
 PICK_OVER_CLEAR = 0.015
 PITCH_DEFAULT = 60.0
@@ -148,8 +152,8 @@ class SkillRuntime:
 
         self.skill = build_skill("pick")
         self.lay = self.skill.arm_layout(self.be.agent)
-        self.open_gripper = float(self.skill.open_gripper)
-        self.closed_gripper = float(self.skill.closed_gripper)
+        self.open_gripper = float(getattr(self.be.agent, "Q_OPEN", self.skill.open_gripper))
+        self.closed_gripper = float(getattr(self.be.agent, "Q_CLOSED", self.skill.closed_gripper))
         self.jaw_dir = np.array([1.0, 0.0, 0.0], np.float32)
 
         self.object_start: dict[str, np.ndarray] = {}
@@ -188,13 +192,13 @@ class SkillRuntime:
 
     def arm_base_xy(self) -> np.ndarray:
         for link in self.be.agent.robot.get_links():
-            if link.name == "left_base":
+            if link.name in ("left_base", "left_Base"):
                 return _vec3(link.pose.p)[:2].astype(np.float64)
         raise RuntimeError("left_base link not found")
 
     def left_base_world(self) -> np.ndarray:
         for link in self.be.agent.robot.get_links():
-            if link.name == "left_base":
+            if link.name in ("left_base", "left_Base"):
                 return _vec3(link.pose.p).astype(np.float64)
         raise RuntimeError("left_base link not found")
 
@@ -313,7 +317,9 @@ class SkillRuntime:
                     q[self.base_ids[0]], q[self.base_ids[1]], q[self.base_ids[2]] = j[0], j[1], j[2]
                     self.set_q(q)
 
-                    hold = self._act(np.array([bx, by, yaw], np.float32), rest, self.open_gripper, 0.0)
+                    hold = self._act(
+                        np.array([bx, by, yaw], np.float32), rest, self.open_gripper, LIFT_START
+                    )
                     for _ in range(6):
                         self._step_unrecorded(hold)
                     qs = self.qnow()
@@ -329,7 +335,7 @@ class SkillRuntime:
                         appr_dir,
                         self.jaw_dir,
                         arm="left",
-                        lift_position=0.0,
+                        lift_position=LIFT_START,
                         shoulder_lift_seed=1.0,
                         max_iters=120,
                     )
@@ -361,7 +367,10 @@ class SkillRuntime:
 
             rest_q = self.skill.current_action_template(self.env)[self.lay["left_arm"]].astype(np.float32)
             base0 = self.current_base_world()
-            nav = [self._act(b, rest_q, self.open_gripper, 0.0) for b in interp(base0, station_obj.station, V_BASE)]
+            nav = [
+                self._act(b, rest_q, self.open_gripper, LIFT_START)
+                for b in interp(base0, station_obj.station, V_BASE)
+            ]
             if nav:
                 nav += [nav[-1]] * 20
             self._run(nav, f"goto_station/{purpose}", {"purpose": purpose})
@@ -405,8 +414,12 @@ class SkillRuntime:
             pre_pt = (grasp_pt - appr_dir * PICK_BACK).astype(np.float32)
 
             # Validated desc-first IK branch: solve grasp pose first, then pre-grasp.
-            desc = _best_full_pose(self.env, grasp_pt, appr_dir, self.jaw_dir, "left", 0.0, seed=st1_arm_seed)
-            appr = _best_full_pose(self.env, pre_pt, appr_dir, self.jaw_dir, "left", 0.0, seed=desc.arm_qpos)
+            desc = _best_full_pose(
+                self.env, grasp_pt, appr_dir, self.jaw_dir, "left", LIFT_START, seed=st1_arm_seed
+            )
+            appr = _best_full_pose(
+                self.env, pre_pt, appr_dir, self.jaw_dir, "left", LIFT_START, seed=desc.arm_qpos
+            )
 
             # Regression fix (2026-07-17, vertical_move travel sync 040f932): with the
             # corrected lift range [-0.3, 0.3] the carriage no longer parks on a hard
@@ -434,7 +447,7 @@ class SkillRuntime:
                     appr_dir,
                     self.jaw_dir,
                     "left",
-                    0.0,
+                    LIFT_START,
                     seed=seedq,
                 )
                 descent.append(w.arm_qpos)
@@ -444,16 +457,16 @@ class SkillRuntime:
             rest_q = self.skill.current_action_template(self.env)[self.lay["left_arm"]].astype(np.float32)
             actions: list[np.ndarray] = []
             for q in interp(rest_q, appr.arm_qpos, V_ARM):
-                actions.append(self._act(st1, q, self.open_gripper, 0.0))
+                actions.append(self._act(st1, q, self.open_gripper, LIFT_START))
             for q0, q1 in zip(descent[:-1], descent[1:]):
                 for q in interp(q0, q1, V_ARM_DESCEND):
-                    actions.append(self._act(st1, q, self.open_gripper, 0.0))
+                    actions.append(self._act(st1, q, self.open_gripper, LIFT_START))
             for k in range(1, CLOSE_STEPS + 1):
                 grip = self.open_gripper + (self.closed_gripper - self.open_gripper) * k / CLOSE_STEPS
-                actions.append(self._act(st1, desc_q, grip, 0.0))
+                actions.append(self._act(st1, desc_q, grip, LIFT_START))
             for _ in range(SETTLE):
-                actions.append(self._act(st1, desc_q, self.closed_gripper, 0.0))
-            for lz in interp([0.0], [LIFT_HIGH], V_LIFT):
+                actions.append(self._act(st1, desc_q, self.closed_gripper, LIFT_START))
+            for lz in interp([LIFT_START], [LIFT_HIGH], V_LIFT):
                 actions.append(self._act(st1, desc_q, self.closed_gripper, float(lz[0])))
             self._run(actions, "pick", {"object": name})
 
@@ -627,7 +640,10 @@ class SkillRuntime:
             station, station_seed = self._select_push_station([start_pt, end_pt], push_dir)
             rest_q = self.skill.current_action_template(self.env)[self.lay["left_arm"]].astype(np.float32)
             base0 = self.current_base_world()
-            nav = [self._act(b, rest_q, self.closed_gripper, 0.0) for b in interp(base0, station, V_BASE)]
+            nav = [
+                self._act(b, rest_q, self.closed_gripper, LIFT_START)
+                for b in interp(base0, station, V_BASE)
+            ]
             if nav:
                 nav += [nav[-1]] * 20
             self._run(nav, "push/nav", {"object": name})
@@ -645,11 +661,11 @@ class SkillRuntime:
 
             actions: list[np.ndarray] = []
             for q in interp(rest_q, hover_q, V_ARM):
-                actions.append(self._act(station, q, self.closed_gripper, 0.0))
+                actions.append(self._act(station, q, self.closed_gripper, LIFT_START))
             prev = hover_q
             for q_next in descend_qs:
                 for q in interp(prev, q_next, V_ARM_DESCEND):
-                    actions.append(self._act(station, q, self.closed_gripper, 0.0))
+                    actions.append(self._act(station, q, self.closed_gripper, LIFT_START))
                 prev = q_next
             self._run(actions, "push/approach", {"object": name})
 
@@ -657,11 +673,11 @@ class SkillRuntime:
             prev = descend_qs[-1]
             for q_next in push_qs:
                 for q in interp(prev, q_next, V_ARM_DESCEND):
-                    push_actions.append(self._act(station, q, self.closed_gripper, 0.0))
+                    push_actions.append(self._act(station, q, self.closed_gripper, LIFT_START))
                 prev = q_next
             self._run(push_actions, "push/line", {"object": name})
 
-            hold = [self._act(station, push_qs[-1], self.closed_gripper, 0.0)] * 20
+            hold = [self._act(station, push_qs[-1], self.closed_gripper, LIFT_START)] * 20
             self._run(hold, "push/settle", {"object": name})
 
             objf = actor_position(obj_actor).copy()
@@ -701,7 +717,7 @@ class SkillRuntime:
         seed_q = seed
         for pt in points:
             if seed_q is None:
-                r = _best_full_pose(self.env, pt, approach_dir, self.jaw_dir, "left", 0.0)
+                r = _best_full_pose(self.env, pt, approach_dir, self.jaw_dir, "left", LIFT_START)
             else:
                 r = solve_arm_ik_full_pose(
                     self.env,
@@ -709,12 +725,14 @@ class SkillRuntime:
                     approach_dir,
                     self.jaw_dir,
                     arm="left",
-                    lift_position=0.0,
+                    lift_position=LIFT_START,
                     seed=seed_q,
                     max_iters=250,
                 )
                 if r.error > 0.015:
-                    alt = _best_full_pose(self.env, pt, approach_dir, self.jaw_dir, "left", 0.0)
+                    alt = _best_full_pose(
+                        self.env, pt, approach_dir, self.jaw_dir, "left", LIFT_START
+                    )
                     if alt.error < r.error:
                         r = alt
             qs.append(r.arm_qpos.copy())
@@ -741,7 +759,9 @@ class SkillRuntime:
                     q = q0.copy()
                     q[self.base_ids[0]], q[self.base_ids[1]], q[self.base_ids[2]] = j[0], j[1], j[2]
                     self.set_q(q)
-                    hold = self._act(np.array([bx, by, yaw], np.float32), rest, self.open_gripper, 0.0)
+                    hold = self._act(
+                        np.array([bx, by, yaw], np.float32), rest, self.open_gripper, LIFT_START
+                    )
                     for _ in range(6):
                         self._step_unrecorded(hold)
                     qs_now = self.qnow()
@@ -754,7 +774,9 @@ class SkillRuntime:
                     errs: list[float] = []
                     qs_path: list[np.ndarray] = []
                     for pt in target_points:
-                        kw: dict[str, Any] = dict(arm="left", lift_position=0.0, max_iters=120)
+                        kw: dict[str, Any] = dict(
+                            arm="left", lift_position=LIFT_START, max_iters=120
+                        )
                         if seed_q is None:
                             kw["shoulder_lift_seed"] = 1.0
                         else:

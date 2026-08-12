@@ -1,0 +1,33 @@
+schema_version: 1
+urdf_path: ../urdf/alohamini2pro.urdf
+srdf_path: ../urdf/alohamini2pro.srdf
+fix_root_link: true
+
+simulation:
+  timestep: 0.004
+  gravity_compensation: true
+
+root_pose:
+  position: [0.0, -0.58, 0.0]
+  quaternion_wxyz: [0.0, 0.0, 0.0, 1.0]
+
+# Raw SI joint positions. Do not place normalized gripper commands here.
+initial_qpos:
+  root_x_axis_joint: 0.0
+  root_y_axis_joint: 0.0
+  root_z_rotation_joint: 0.0
+  vertical_move: 0.20
+  left_shoulder_pan: 0.0
+  left_shoulder_lift: 0.0735978469
+  left_elbow_flex: 0.0169070196
+  left_wrist_flex: 1.3960929593
+  left_wrist_yaw_joint: 0.0
+  left_wrist_roll: 0.0
+  left_gripper: -1.8030294104
+  right_shoulder_pan: 0.0
+  right_shoulder_lift: 0.0735978469
+  right_elbow_flex: 0.0169070196
+  right_wrist_flex: 1.3960929593
+  right_wrist_yaw_joint: 0.0
+  right_wrist_roll: 0.0
+  right_gripper: -1.8030294104

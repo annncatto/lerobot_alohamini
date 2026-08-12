@@ -1,0 +1,88 @@
+# Conservative first-pass spheres estimated from the supplied STL bounds.
+# These are not calibrated collision annotations; see README.md.
+collision_spheres:
+  base_link:
+    - {center: [0.0, 0.0, 0.20], radius: 0.20}
+    - {center: [0.0, 0.0, 0.48], radius: 0.20}
+    - {center: [0.0, 0.0, 0.76], radius: 0.20}
+    - {center: [0.0, 0.0, 1.02], radius: 0.18}
+  vertical_link:
+    - {center: [-0.17, -0.043, 0.402], radius: 0.09}
+    - {center: [0.0, -0.043, 0.402], radius: 0.09}
+    - {center: [0.17, -0.043, 0.402], radius: 0.09}
+
+  left_Base:
+    - {center: [0.0, 0.010, 0.038], radius: 0.075}
+  left_Rotation_Pitch:
+    - {center: [0.002, -0.016, 0.028], radius: 0.055}
+  left_Upper_Arm:
+    - {center: [-0.021, 0.020, 0.003], radius: 0.055}
+    - {center: [-0.021, 0.075, 0.003], radius: 0.055}
+    - {center: [-0.021, 0.130, 0.003], radius: 0.055}
+  left_Lower_Arm:
+    - {center: [0.003, -0.020, 0.001], radius: 0.055}
+    - {center: [0.003, -0.080, 0.001], radius: 0.055}
+    - {center: [0.003, -0.140, 0.001], radius: 0.055}
+    - {center: [0.003, -0.195, 0.001], radius: 0.055}
+  left_Wrist_Pitch_Roll:
+    - {center: [0.0, -0.012, 0.0], radius: 0.038}
+  left_wrist_yaw:
+    - {center: [0.0, 0.010, -0.018], radius: 0.040}
+    - {center: [0.0, 0.032, 0.022], radius: 0.040}
+    - {center: [0.0, 0.045, 0.055], radius: 0.035}
+  left_Fixed_Jaw:
+    # Match the provisional URDF palm + fixed-finger boxes. The previous
+    # diagonal -Y chain represented the wrong tool axis and blocked the final
+    # approach to tabletop objects.
+    - {center: [-0.020, 0.002, 0.011], radius: 0.023}
+    - {center: [0.015, 0.002, 0.011], radius: 0.023}
+    - {center: [-0.019, 0.000, 0.048], radius: 0.009}
+    - {center: [-0.019, 0.000, 0.068], radius: 0.009}
+    - {center: [-0.019, 0.000, 0.088], radius: 0.009}
+    - {center: [-0.019, 0.000, 0.097], radius: 0.007}
+  left_Moving_Jaw:
+    - {center: [0.0, -0.020, 0.003], radius: 0.030}
+    - {center: [0.0, -0.060, 0.003], radius: 0.030}
+  left_camera:
+    # Four spheres fit the 36 x 36.97 x 19.11 mm camera box. A single 30 mm
+    # sphere plus the global 4 mm buffer protruded far below the real camera
+    # and rejected otherwise valid tabletop grasps.
+    - {center: [-0.0090, -0.00924, 0.00955], radius: 0.016}
+    - {center: [-0.0090,  0.00924, 0.00955], radius: 0.016}
+    - {center: [ 0.0090, -0.00924, 0.00955], radius: 0.016}
+    - {center: [ 0.0090,  0.00924, 0.00955], radius: 0.016}
+
+  right_Base:
+    - {center: [0.0, 0.010, 0.038], radius: 0.075}
+  right_Rotation_Pitch:
+    - {center: [0.002, -0.016, 0.028], radius: 0.055}
+  right_Upper_Arm:
+    - {center: [-0.021, 0.020, 0.003], radius: 0.055}
+    - {center: [-0.021, 0.075, 0.003], radius: 0.055}
+    - {center: [-0.021, 0.130, 0.003], radius: 0.055}
+  right_Lower_Arm:
+    - {center: [0.003, -0.020, 0.001], radius: 0.055}
+    - {center: [0.003, -0.080, 0.001], radius: 0.055}
+    - {center: [0.003, -0.140, 0.001], radius: 0.055}
+    - {center: [0.003, -0.195, 0.001], radius: 0.055}
+  right_Wrist_Pitch_Roll:
+    - {center: [0.0, -0.012, 0.0], radius: 0.038}
+  right_wrist_yaw:
+    - {center: [0.0, 0.010, -0.018], radius: 0.040}
+    - {center: [0.0, 0.032, 0.022], radius: 0.040}
+    - {center: [0.0, 0.045, 0.055], radius: 0.035}
+  right_Fixed_Jaw:
+    - {center: [-0.020, 0.002, 0.011], radius: 0.023}
+    - {center: [0.015, 0.002, 0.011], radius: 0.023}
+    - {center: [-0.019, 0.000, 0.048], radius: 0.009}
+    - {center: [-0.019, 0.000, 0.068], radius: 0.009}
+    - {center: [-0.019, 0.000, 0.088], radius: 0.009}
+    - {center: [-0.019, 0.000, 0.097], radius: 0.007}
+  right_Moving_Jaw:
+    - {center: [0.0, -0.020, 0.003], radius: 0.030}
+    - {center: [0.0, -0.060, 0.003], radius: 0.030}
+  right_camera:
+    - {center: [-0.0090, -0.00924, 0.00955], radius: 0.016}
+    - {center: [-0.0090,  0.00924, 0.00955], radius: 0.016}
+    - {center: [ 0.0090, -0.00924, 0.00955], radius: 0.016}
+    - {center: [ 0.0090,  0.00924, 0.00955], radius: 0.016}

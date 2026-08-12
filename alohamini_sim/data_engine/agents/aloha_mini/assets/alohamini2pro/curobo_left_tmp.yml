@@ -1,0 +1,119 @@
+robot_cfg:
+  kinematics:
+    use_usd_kinematics: false
+    urdf_path: ${ASSETS_PATH}/assets/embodiments/alohamini2pro/urdf/alohamini2pro.urdf
+    asset_root_path: null
+    base_link: "root"
+    ee_link: "left_Fixed_Jaw"
+    collision_link_names: &collision_links
+      - "base_link"
+      - "vertical_link"
+      - "left_Base"
+      - "left_Rotation_Pitch"
+      - "left_Upper_Arm"
+      - "left_Lower_Arm"
+      - "left_Wrist_Pitch_Roll"
+      - "left_wrist_yaw"
+      - "left_Fixed_Jaw"
+      - "left_Moving_Jaw"
+      - "left_camera"
+      - "right_Base"
+      - "right_Rotation_Pitch"
+      - "right_Upper_Arm"
+      - "right_Lower_Arm"
+      - "right_Wrist_Pitch_Roll"
+      - "right_wrist_yaw"
+      - "right_Fixed_Jaw"
+      - "right_Moving_Jaw"
+      - "right_camera"
+    collision_spheres: ${ASSETS_PATH}/assets/embodiments/alohamini2pro/collision_alohamini2pro.yml
+    collision_sphere_buffer: 0.004
+    extra_collision_spheres: {}
+    use_global_cumul: true
+    self_collision_ignore:
+      base_link: ["vertical_link", "left_Base", "right_Base"]
+      vertical_link: ["left_Base", "right_Base"]
+      left_Base: ["left_Rotation_Pitch"]
+      left_Rotation_Pitch: ["left_Upper_Arm"]
+      left_Upper_Arm: ["left_Lower_Arm"]
+      left_Lower_Arm: ["left_Wrist_Pitch_Roll"]
+      left_Wrist_Pitch_Roll: ["left_wrist_yaw"]
+      left_wrist_yaw: ["left_Fixed_Jaw", "left_Moving_Jaw", "left_camera"]
+      left_Fixed_Jaw: ["left_Moving_Jaw", "left_camera"]
+      left_Moving_Jaw: ["left_camera"]
+      right_Base: ["right_Rotation_Pitch"]
+      right_Rotation_Pitch: ["right_Upper_Arm"]
+      right_Upper_Arm: ["right_Lower_Arm"]
+      right_Lower_Arm: ["right_Wrist_Pitch_Roll"]
+      right_Wrist_Pitch_Roll: ["right_wrist_yaw"]
+      right_wrist_yaw: ["right_Fixed_Jaw", "right_Moving_Jaw", "right_camera"]
+      right_Fixed_Jaw: ["right_Moving_Jaw", "right_camera"]
+      right_Moving_Jaw: ["right_camera"]
+    self_collision_buffer:
+      base_link: 0.0
+      vertical_link: 0.0
+      left_Base: 0.0
+      left_Rotation_Pitch: 0.0
+      left_Upper_Arm: 0.0
+      left_Lower_Arm: 0.0
+      left_Wrist_Pitch_Roll: 0.0
+      left_wrist_yaw: 0.0
+      left_Fixed_Jaw: 0.0
+      left_Moving_Jaw: 0.0
+      left_camera: 0.0
+      right_Base: 0.0
+      right_Rotation_Pitch: 0.0
+      right_Upper_Arm: 0.0
+      right_Lower_Arm: 0.0
+      right_Wrist_Pitch_Roll: 0.0
+      right_wrist_yaw: 0.0
+      right_Fixed_Jaw: 0.0
+      right_Moving_Jaw: 0.0
+      right_camera: 0.0
+    mesh_link_names: *collision_links
+    lock_joints:
+      root_x_axis_joint: 0.0
+      root_y_axis_joint: 0.0
+      root_z_rotation_joint: 0.0
+      vertical_move: 0.2
+      left_gripper: -1.8030294104
+      right_shoulder_pan: 0.0
+      right_shoulder_lift: -1.745
+      right_elbow_flex: 1.571
+      right_wrist_flex: 0.349
+      right_wrist_yaw_joint: 0.0
+      right_wrist_roll: 0.0
+      right_gripper: -1.8030294104
+    extra_links: null
+    cspace:
+      joint_names:
+        - "root_x_axis_joint"
+        - "root_y_axis_joint"
+        - "root_z_rotation_joint"
+        - "vertical_move"
+        - "left_shoulder_pan"
+        - "left_shoulder_lift"
+        - "left_elbow_flex"
+        - "left_wrist_flex"
+        - "left_wrist_yaw_joint"
+        - "left_wrist_roll"
+        - "left_gripper"
+        - "right_shoulder_pan"
+        - "right_shoulder_lift"
+        - "right_elbow_flex"
+        - "right_wrist_flex"
+        - "right_wrist_yaw_joint"
+        - "right_wrist_roll"
+        - "right_gripper"
+      retract_config: [0.0, 0.0, 0.0, 0.2, 0.0, -1.745, 1.571, 0.349, 0.0, 0.0, -1.8030294104, 0.0, -1.745, 1.571, 0.349, 0.0, 0.0, -1.8030294104]
+      null_space_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+      cspace_distance_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+      max_jerk: 100.0
+      max_acceleration: 3.0
+planner:
+  frame_bias: [0.0, 0.0, 0.0]
+  time_dilation_factor: 0.5
+  gripper_num_steps: 1000
+  world_table_dims: [1.2, 0.7, 0.05]
+  # Temporary until the hand-authored collision spheres are calibrated.
+  self_collision_check: false

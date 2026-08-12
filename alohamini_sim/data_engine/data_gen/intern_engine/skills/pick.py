@@ -55,10 +55,11 @@ class PickSkill(BaseSkill):
 
         template = self.current_action_template(env)
         template[:3] = 0.0
+        layout = self.arm_layout(env.unwrapped.agent)
         if arm == "left":
-            template[15] = open_gripper
+            template[layout["right_grip"]] = open_gripper
         else:
-            template[9] = open_gripper
+            template[layout["left_grip"]] = open_gripper
 
         actions: list[np.ndarray] = []
         phases: list[str] = []
