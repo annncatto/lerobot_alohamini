@@ -172,7 +172,9 @@ outputs/
 
 # Dev folders
 .cache/*
+ros2/.colcon/
 *.stl
 *.urdf
+!src/lerobot/robots/alohamini/assets/alohamini2pro/alohamini2pro_moveit.urdf
 *.xml
 *.part
