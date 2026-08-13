@@ -15,13 +15,11 @@
 # TODO(aliberts, Steven, Pepijn): use gRPC calls instead of zmq?
 
 import base64
-import inspect
 import json
 import logging
 import time
 from collections import deque
 from functools import cached_property
-import os
 from typing import Any
 
 import cv2
@@ -35,10 +33,9 @@ from lerobot.utils.errors import DeviceNotConnectedError
 from ..robot import Robot
 from .config_alohamini import AlohaMiniClientConfig
 from .model_specs import arm_state_keys_for_robot_model
-from .lift_axis import LiftAxisConfig
 
 logging.basicConfig(
-    #level=logging.INFO,  
+    #level=logging.INFO,
     format="[%(filename)s:%(lineno)d] %(message)s"
 )
 
@@ -76,6 +73,7 @@ class AlohaMiniClient(Robot):
         self.last_frames = {}
 
         self.last_remote_state = {}
+        self.robot_metadata: dict[str, Any] | None = None
         # Incremented only when a new observation message is successfully decoded.
         # Callers can use this to distinguish a fresh remote frame from ``last_frames`` fallback.
         self._observation_sequence = 0
@@ -178,7 +176,8 @@ class AlohaMiniClient(Robot):
         """Send one observation request without waiting for its response."""
         zmq = self._zmq
         self._observation_request_id += 1
-        request_token = str(self._observation_request_id).encode("ascii")
+        request_kind = "full" if self.config.request_cameras else "state"
+        request_token = f"{self._observation_request_id}:{request_kind}".encode("ascii")
 
         try:
             self.zmq_observation_socket.send(request_token, flags=zmq.NOBLOCK)
@@ -349,6 +348,9 @@ class AlohaMiniClient(Robot):
     ) -> tuple[dict[str, np.ndarray], RobotObservation]:
         """Extracts frames, and state from the parsed observation."""
 
+        metadata = observation.get("_robot_metadata")
+        if isinstance(metadata, dict):
+            self.robot_metadata = metadata
         flat_state = {key: observation.get(key, 0.0) for key in self._state_order}
 
         state_vec = np.array([flat_state[key] for key in self._state_order], dtype=np.float32)
@@ -357,7 +359,7 @@ class AlohaMiniClient(Robot):
         #lineno = frame.f_lineno
         #print(f"[{filename}:{lineno}] obs_dict:{obs_dict}")
         #print(f"[{filename}:{frame.f_lineno}] obs_dict:{obs_dict}")
-        
+
         #logging.warning("obs_dict: %s", obs_dict)
 
         return encoded_frames, obs_dict
@@ -471,7 +473,7 @@ class AlohaMiniClient(Robot):
             "y.vel": y_cmd,
             "theta.vel": theta_cmd,
         }
-    
+
     # lift_axis.vel
     # def _from_keyboard_to_lift_action(self, pressed_keys: np.ndarray):
     #     LIFT_VEL = 1000  # adjust if too slow/fast
@@ -485,7 +487,7 @@ class AlohaMiniClient(Robot):
     #     else:
     #         v = 0.0
     #     return {"lift_axis.vel": int(v)}
-    
+
 
     # lift_axis.height_mm
     def _from_keyboard_to_lift_action(self, pressed_keys: np.ndarray):

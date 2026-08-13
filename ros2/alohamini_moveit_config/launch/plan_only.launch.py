@@ -4,8 +4,8 @@ from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
-from launch.conditions import IfCondition
+from launch.actions import DeclareLaunchArgument, GroupAction
+from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from moveit_configs_utils import MoveItConfigsBuilder
@@ -53,12 +53,18 @@ def generate_launch_description() -> LaunchDescription:
     return LaunchDescription(
         [
             DeclareLaunchArgument("use_rviz", default_value="true"),
+            DeclareLaunchArgument(
+                "joycon_preview",
+                default_value="false",
+                description="Disable the fixed Home joint publisher so the Joy-Con IK worker can preview /joint_states.",
+            ),
             Node(
                 package="joint_state_publisher",
                 executable="joint_state_publisher",
                 name="alohamini_fake_joint_state_publisher",
                 parameters=[moveit_config.robot_description, home],
                 output="screen",
+                condition=UnlessCondition(LaunchConfiguration("joycon_preview")),
             ),
             Node(
                 package="robot_state_publisher",
@@ -72,20 +78,34 @@ def generate_launch_description() -> LaunchDescription:
                 output="screen",
                 parameters=move_group_parameters,
             ),
-            Node(
-                package="rviz2",
-                executable="rviz2",
-                name="moveit_rviz",
-                output="log",
-                arguments=["-d", str(package / "config/moveit.rviz")],
-                parameters=[
-                    moveit_config.robot_description,
-                    moveit_config.robot_description_semantic,
-                    moveit_config.robot_description_kinematics,
-                    moveit_config.planning_pipelines,
-                    moveit_config.joint_limits,
-                ],
+            GroupAction(
                 condition=IfCondition(LaunchConfiguration("use_rviz")),
+                actions=[
+                    Node(
+                        package="rviz2",
+                        executable="rviz2",
+                        name="moveit_rviz",
+                        output="log",
+                        arguments=["-d", str(package / "config/moveit.rviz")],
+                        parameters=[
+                            moveit_config.robot_description,
+                            moveit_config.robot_description_semantic,
+                            moveit_config.robot_description_kinematics,
+                            moveit_config.planning_pipelines,
+                            moveit_config.joint_limits,
+                        ],
+                        condition=UnlessCondition(LaunchConfiguration("joycon_preview")),
+                    ),
+                    Node(
+                        package="rviz2",
+                        executable="rviz2",
+                        name="joycon_preview_rviz",
+                        output="log",
+                        arguments=["-d", str(package / "config/joycon_preview.rviz")],
+                        parameters=[moveit_config.robot_description],
+                        condition=IfCondition(LaunchConfiguration("joycon_preview")),
+                    ),
+                ],
             ),
         ]
     )

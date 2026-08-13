@@ -55,6 +55,9 @@ def test_moveit_launch_is_plan_only_by_default():
     assert '"allow_trajectory_execution": False' in source
     assert "mock_trajectory_bridge" not in source
     assert "FeetechMotorsBus" not in source
+    assert '"joycon_preview"' in source
+    assert 'UnlessCondition(LaunchConfiguration("joycon_preview"))' in source
+    assert 'config/joycon_preview.rviz' in source
 
 
 def test_mock_bridge_has_no_hardware_backend():
@@ -91,3 +94,39 @@ def test_hardware_worker_has_independent_write_and_shutdown_gates():
     assert "current gate failed" in source
     assert "expected all seven motors torque-disabled" in source
     assert "disable_torque(list(ARM_NAMES)" in source
+
+
+def test_joycon_cartesian_controller_is_dry_run_by_default():
+    controller = (REPO_ROOT / "scripts/joycon_cartesian_control.py").read_text()
+    worker = (REPO_ROOT / "scripts/alohamini_moveit_ik_worker.py").read_text()
+    controller_tree = ast.parse(controller)
+
+    execute_arguments = [
+        node
+        for node in ast.walk(controller_tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "add_argument"
+        and any(isinstance(arg, ast.Constant) and arg.value == "--execute" for arg in node.args)
+    ]
+    assert len(execute_arguments) == 1
+    assert any(
+        keyword.arg == "action" and isinstance(keyword.value, ast.Constant) and keyword.value.value == "store_true"
+        for keyword in execute_arguments[0].keywords
+    )
+    assert "robot.send_action" in controller
+    assert "if args.execute:" in controller
+    assert "FeetechMotorsBus" not in controller
+    assert "GetPositionIK" in worker
+    assert "GetPositionFK" in worker
+    assert 'create_publisher(JointState, "/joint_states"' in worker
+    assert 'MarkerArray, "/alohamini/joycon_tcp_markers"' in worker
+    assert 'data["command"] == "preview"' in worker
+    assert "complete = dict(PREVIEW_HOME)" in worker
+    assert 'request.header.frame_id = "root"' in worker
+    assert "relative_pose(base_pose, tcp_pose)" in worker
+    assert 'ik.pose_stamped.header.frame_id = "root"' in worker
+    assert 'request_data.get("gripper_rad"' in worker
+    assert 'Marker.LINE_STRIP' in worker
+    assert 'request_data["candidate_pose"]' in worker
+    assert "FeetechMotorsBus" not in worker

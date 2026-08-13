@@ -97,6 +97,9 @@ class AlohaMiniClientConfig(RobotConfig):
     port_zmq_cmd: int = 5555
     port_zmq_observations: int = 5556
     observation_request_window: int = 3
+    # State-only clients (for example, high-rate Cartesian teleoperation) can
+    # skip camera JPEG transport and decoding without changing the Host port.
+    request_cameras: bool = True
 
     # Must match the robot_model used on the host side so that _state_ft keys are consistent.
     # alohamini1   – so-arm-5dof (6 joints per arm, no wrist_yaw)

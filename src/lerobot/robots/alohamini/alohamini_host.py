@@ -49,7 +49,7 @@ class AlohaMiniHost:
         self.zmq_observation_socket.close()
         self.zmq_cmd_socket.close()
         self.zmq_context.term()
- 
+
 
 def _jsonable(value):
     """Convert numpy scalars to JSON-native values without touching normal Python values."""
@@ -61,8 +61,15 @@ def _jsonable(value):
     return value
 
 
-def build_observation_multipart(observation: dict, camera_keys) -> list[bytes]:
-    """Encode state as JSON and camera images as binary JPEG multipart frames."""
+def build_observation_multipart(observation: dict, camera_keys, encoded_camera_keys=None) -> list[bytes]:
+    """Encode state as JSON and selected camera images as binary JPEG frames.
+
+    ``camera_keys`` always names every image field that must be removed from the
+    JSON state. ``encoded_camera_keys`` may be empty for state-only clients; when
+    omitted, all cameras are encoded for backward compatibility.
+    """
+    camera_keys = tuple(camera_keys)
+    encoded_camera_keys = camera_keys if encoded_camera_keys is None else tuple(encoded_camera_keys)
     state_observation = {
         key: _jsonable(value) for key, value in observation.items() if key not in camera_keys
     }
@@ -70,7 +77,7 @@ def build_observation_multipart(observation: dict, camera_keys) -> list[bytes]:
 
     parts = [json.dumps(state_observation).encode("utf-8")]
     image_names = []
-    for cam_key in camera_keys:
+    for cam_key in encoded_camera_keys:
         frame = observation.get(cam_key)
         if frame is None:
             continue
@@ -84,6 +91,44 @@ def build_observation_multipart(observation: dict, camera_keys) -> list[bytes]:
     state_observation["_images"] = image_names
     parts[0] = json.dumps(state_observation).encode("utf-8")
     return parts
+
+
+def build_robot_metadata(robot: AlohaMini) -> dict:
+    """Describe the Host's actual motor normalization without exposing raw state.
+
+    Cartesian controllers need this to convert the normalized arm observation
+    back to encoder ticks and URDF radians.  Sending the calibration alongside
+    observations avoids copying a potentially stale calibration file to the
+    client computer.
+    """
+    motors = {}
+    for bus in (robot.left_bus, robot.right_bus):
+        if bus is None:
+            continue
+        for name, motor in bus.motors.items():
+            calibration = bus.calibration.get(name)
+            if calibration is None:
+                continue
+            motors[name] = {
+                "id": int(motor.id),
+                "model": motor.model,
+                "normalization": motor.norm_mode.value,
+                "drive_mode": int(calibration.drive_mode),
+                "range_min": int(calibration.range_min),
+                "range_max": int(calibration.range_max),
+            }
+    metadata = {
+        "schema_version": 1,
+        "robot_model": robot.config.robot_model,
+        "motors": motors,
+    }
+    if getattr(robot, "lift", None) is not None:
+        metadata["lift_axis"] = {
+            "soft_min_mm": float(robot.lift.cfg.soft_min_mm),
+            "soft_max_mm": float(robot.lift.cfg.soft_max_mm),
+            "descent_floor_mm": float(robot.lift.cfg.descent_floor_mm),
+        }
+    return metadata
 
 
 def parse_bool(value: str | bool) -> bool:
@@ -147,6 +192,7 @@ def main():
 
     logging.info("Connecting AlohaMini")
     robot.connect()
+    robot_metadata = build_robot_metadata(robot)
 
     logging.info("Starting HostAgent")
     host_config = AlohaMiniHostConfig()
@@ -172,10 +218,10 @@ def main():
             try:
                 msg = host.zmq_cmd_socket.recv_string(zmq.NOBLOCK)
                 data = dict(json.loads(msg))
-                #print(f"Received action: {data}")   # debug 
+                #print(f"Received action: {data}")   # debug
                 _action_sent = robot.send_action(data)
                 command_received = True
-                
+
                 last_cmd_time = time.time()
                 watchdog_active = False
             except zmq.Again:
@@ -192,7 +238,7 @@ def main():
                 watchdog_active = True
                 robot.stop_motion()
 
-            
+
             last_observation = robot.get_observation()
             observation_done_t = time.perf_counter()
 
@@ -211,7 +257,12 @@ def main():
 
             encode_done_t = request_poll_done_t
             if request_identity is not None and request_token is not None:
-                observation_parts = build_observation_multipart(last_observation, robot.cameras.keys())
+                last_observation["_robot_metadata"] = robot_metadata
+                camera_keys = tuple(robot.cameras.keys())
+                encoded_camera_keys = () if request_token.endswith(b":state") else camera_keys
+                observation_parts = build_observation_multipart(
+                    last_observation, camera_keys, encoded_camera_keys
+                )
                 encode_done_t = time.perf_counter()
                 try:
                     host.zmq_observation_socket.send_multipart(
