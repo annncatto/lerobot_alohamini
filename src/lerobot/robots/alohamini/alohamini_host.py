@@ -19,6 +19,8 @@ import json
 import logging
 import math
 import time
+from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor
 
 import cv2
 import zmq
@@ -221,7 +223,10 @@ def _jsonable(value):
 
 
 def build_observation_multipart(
-    observation: dict, camera_keys, encoded_camera_keys=None
+    observation: dict,
+    camera_keys,
+    encoded_camera_keys=None,
+    encoding_timings_ms: dict[str, float] | None = None,
 ) -> list[bytes]:
     """Encode state as JSON and selected camera images as binary JPEG frames.
 
@@ -242,7 +247,12 @@ def build_observation_multipart(
         frame = observation.get(cam_key)
         if frame is None:
             continue
+        encode_started = time.perf_counter()
         ret, buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+        if encoding_timings_ms is not None:
+            encoding_timings_ms[f"encode_{cam_key}"] = (
+                time.perf_counter() - encode_started
+            ) * 1e3
         if not ret:
             logging.warning("Failed to JPEG encode camera frame %s.", cam_key)
             continue
@@ -386,27 +396,14 @@ def main():
         if cli_value is not None:
             setattr(host_config, field_name, cli_value)
     host = AlohaMiniHost(host_config)
-    camera_stream = (
-        CameraStreamPublisher(
-            robot.cameras,
-            port=host_config.port_zmq_camera_stream,
-            jpeg_quality=host_config.camera_stream_jpeg_quality,
-            max_age_ms=host_config.camera_stream_max_age_ms,
-        )
-        if host_config.camera_stream_enabled and robot.cameras
-        else None
+    jpeg_executor = ThreadPoolExecutor(
+        max_workers=max(1, len(robot.cameras)),
+        thread_name_prefix="alohamini-jpeg",
     )
-    if camera_stream is not None:
-        try:
-            camera_stream.start()
-        except Exception:
-            host.disconnect()
-            robot.disconnect()
-            raise
-        logging.info(
-            "Camera stream publishing on tcp://*:%d",
-            host_config.port_zmq_camera_stream,
-        )
+    pending_observation_responses: deque[
+        tuple[bytes, bytes, list[bytes] | Future[list[bytes]], dict[str, float]]
+    ] = deque()
+    max_pending_observation_responses = 8
 
     last_cmd_time = time.monotonic()
     watchdog_active = False
@@ -438,12 +435,13 @@ def main():
             # still receive the latest frames in their requested cycle.
             request_identity = None
             request_token = None
-            try:
-                request_parts = host.zmq_observation_socket.recv_multipart(flags=zmq.NOBLOCK)
-                request_identity = request_parts[0]
-                request_token = request_parts[-1]
-            except zmq.Again:
-                pass
+            if len(pending_observation_responses) < max_pending_observation_responses:
+                try:
+                    request_parts = host.zmq_observation_socket.recv_multipart(flags=zmq.NOBLOCK)
+                    request_identity = request_parts[0]
+                    request_token = request_parts[-1]
+                except zmq.Again:
+                    pass
             request_poll_done_t = time.perf_counter()
             include_cameras = request_token is not None and not request_token.endswith(b":state")
 
@@ -491,22 +489,61 @@ def main():
                 action_sent = True
             action_done_t = time.perf_counter()
 
-            encode_done_t = action_done_t
+            encoding_timings_ms: dict[str, float] = {}
             if request_identity is not None and request_token is not None:
                 camera_keys = tuple(robot.cameras.keys())
                 encoded_camera_keys = () if request_token.endswith(b":state") else camera_keys
-                observation_parts = build_observation_multipart(
-                    {**last_observation, "_robot_metadata": robot_metadata},
-                    camera_keys,
-                    encoded_camera_keys,
+                response_observation = {
+                    **last_observation,
+                    "_robot_metadata": robot_metadata,
+                }
+                response_timings_ms: dict[str, float] = {}
+                if encoded_camera_keys:
+                    response_payload = jpeg_executor.submit(
+                        build_observation_multipart,
+                        response_observation,
+                        camera_keys,
+                        encoded_camera_keys,
+                        response_timings_ms,
+                    )
+                else:
+                    response_payload = build_observation_multipart(
+                        response_observation,
+                        camera_keys,
+                        encoded_camera_keys,
+                        response_timings_ms,
+                    )
+                pending_observation_responses.append(
+                    (
+                        request_identity,
+                        request_token,
+                        response_payload,
+                        response_timings_ms,
+                    )
                 )
-                encode_done_t = time.perf_counter()
+
+            encode_done_t = time.perf_counter()
+            while pending_observation_responses:
+                identity, token, payload, response_timings_ms = pending_observation_responses[0]
+                if isinstance(payload, Future):
+                    if not payload.done():
+                        break
+                    try:
+                        observation_parts = payload.result()
+                    except Exception:
+                        logging.exception("JPEG observation encoding failed")
+                        pending_observation_responses.popleft()
+                        continue
+                else:
+                    observation_parts = payload
                 try:
                     host.zmq_observation_socket.send_multipart(
-                        [request_identity, request_token, *observation_parts], flags=zmq.NOBLOCK
+                        [identity, token, *observation_parts], flags=zmq.NOBLOCK
                     )
                 except zmq.Again:
-                    logging.info("Dropping observation response, client is not ready")
+                    break
+                pending_observation_responses.popleft()
+                encoding_timings_ms.update(response_timings_ms)
             response_send_done_t = time.perf_counter()
 
             # Ensure a short sleep to avoid overloading the CPU.
@@ -520,11 +557,12 @@ def main():
                 "robot_observation": (observation_done_t - request_poll_done_t) * 1e3,
                 "trajectory_action": (action_done_t - command_done_t) * 1e3,
                 "request_poll": (request_poll_done_t - loop_start_t) * 1e3,
-                "jpeg_encode": (encode_done_t - action_done_t) * 1e3,
+                "jpeg_encode": sum(encoding_timings_ms.values()),
                 "response_send": (response_send_done_t - encode_done_t) * 1e3,
                 "sleep": (loop_done_t - response_send_done_t) * 1e3,
                 "loop": (loop_done_t - loop_start_t) * 1e3,
                 **robot.logs.get("observation_timing_ms", {}),
+                **encoding_timings_ms,
             }
             for name, value_ms in loop_timings_ms.items():
                 timing_totals_ms[name] = timing_totals_ms.get(name, 0.0) + value_ms
@@ -539,10 +577,10 @@ def main():
                 averages = {
                     name: total_ms / timing_loop_count for name, total_ms in timing_totals_ms.items()
                 }
-                camera_text = " ".join(
+                image_text = " ".join(
                     f"{name}={value:.1f}"
                     for name, value in averages.items()
-                    if name.startswith("camera_")
+                    if name.startswith(("camera_", "encode_"))
                 )
                 print(
                     f"[HOST TIMING avg ms/loop] Hz={timing_loop_count / timing_elapsed_s:.1f} "
@@ -550,7 +588,7 @@ def main():
                     f"trajectory_action={averages['trajectory_action']:.1f} "
                     f"left={averages.get('left_arm', 0.0):.1f} base={averages.get('base', 0.0):.1f} "
                     f"right={averages.get('right_arm', 0.0):.1f} lift={averages.get('lift', 0.0):.1f} "
-                    f"currents={averages.get('currents', 0.0):.1f} {camera_text} "
+                    f"currents={averages.get('currents', 0.0):.1f} {image_text} "
                     f"jpeg={averages['jpeg_encode']:.1f} send={averages['response_send']:.1f} "
                     f"sleep={averages['sleep']:.1f} loop={averages['loop']:.1f}",
                     flush=True,
@@ -621,8 +659,7 @@ def main():
         print("Keyboard interrupt received. Exiting...")
     finally:
         print("Shutting down AlohaMini Host.")
-        if camera_stream is not None:
-            camera_stream.stop()
+        jpeg_executor.shutdown(wait=True, cancel_futures=True)
         robot.disconnect()
         host.disconnect()
 

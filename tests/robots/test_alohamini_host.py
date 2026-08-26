@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from lerobot.robots.alohamini.alohamini import AlohaMini
+from lerobot.robots.alohamini.alohamini_client import AlohaMiniClient
 from lerobot.robots.alohamini.alohamini_host import (
     JointTrajectoryExecutor,
     build_observation_multipart,
@@ -142,6 +143,29 @@ def test_state_only_observation_has_no_jpeg_frames() -> None:
     assert state["_robot_metadata"] == {"schema_version": 1}
 
 
+@pytest.mark.parametrize(
+    ("include_cameras", "expected"),
+    [(True, b"1:camera"), (False, b"1:state")],
+)
+def test_client_observation_token_selects_payload(
+    include_cameras: bool, expected: bytes
+) -> None:
+    sent = []
+    client = object.__new__(AlohaMiniClient)
+    client._zmq = SimpleNamespace(NOBLOCK=1, ZMQError=RuntimeError)
+    client._observation_request_id = 0
+    client.zmq_observation_socket = SimpleNamespace(
+        send=lambda token, flags: sent.append((token, flags))
+    )
+
+    token = AlohaMiniClient._send_observation_request(
+        client, include_cameras=include_cameras
+    )
+
+    assert token == expected
+    assert sent == [(expected, 1)]
+
+
 def test_full_observation_keeps_camera_multipart_compatibility(monkeypatch) -> None:
     encoded = SimpleNamespace(tobytes=lambda: b"jpeg-data")
     monkeypatch.setattr(
@@ -149,13 +173,60 @@ def test_full_observation_keeps_camera_multipart_compatibility(monkeypatch) -> N
         lambda *_args, **_kwargs: (True, encoded),
     )
 
+    timings = {}
     parts = build_observation_multipart(
-        {"x.vel": 0.0, "forward": object()}, camera_keys=("forward",)
+        {"x.vel": 0.0, "forward": object()},
+        camera_keys=("forward",),
+        encoding_timings_ms=timings,
     )
 
     assert len(parts) == 3
     assert json.loads(parts[0])["_images"] == ["forward"]
     assert parts[1:] == [b"forward", b"jpeg-data"]
+    assert timings["encode_forward"] >= 0.0
+
+
+def test_control_observation_peeks_camera_cache_without_waiting_for_new_frame() -> None:
+    class FakeCamera:
+        def __init__(self) -> None:
+            self.max_age_ms = None
+            self.latest_timestamp = 12.5
+
+        def read_latest(self, max_age_ms: int):
+            self.max_age_ms = max_age_ms
+            return "cached-frame"
+
+    class FakeBus:
+        def sync_read(self, register, motors):
+            if register == "Present_Velocity":
+                return dict.fromkeys(motors, 0.0)
+            return {}
+
+    robot = object.__new__(AlohaMini)
+    robot.id = "test"
+    robot.left_bus = FakeBus()
+    robot.right_bus = None
+    robot.left_arm_motors = []
+    robot.right_arm_motors = []
+    robot.base_motors = ["base_left_wheel", "base_back_wheel", "base_right_wheel"]
+    robot._wheel_raw_to_body = lambda *_args: {
+        "x.vel": 0.0,
+        "y.vel": 0.0,
+        "theta.vel": 0.0,
+    }
+    robot.lift = SimpleNamespace(contribute_observation=lambda _obs: None)
+    robot.read_and_check_currents = lambda **_kwargs: {}
+    camera = FakeCamera()
+    robot.cameras = {"forward": camera}
+    robot.logs = {}
+
+    observation = AlohaMini.get_observation.__wrapped__(robot, include_cameras=True)
+
+    assert observation["forward"] == "cached-frame"
+    assert camera.max_age_ms == 500
+    assert observation["_host_timing"]["camera_capture_monotonic_s"] == {
+        "forward": 12.5
+    }
 
 
 def test_robot_metadata_describes_normalization_and_calibration() -> None:
