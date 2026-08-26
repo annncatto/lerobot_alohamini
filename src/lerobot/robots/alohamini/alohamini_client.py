@@ -79,6 +79,7 @@ class AlohaMiniClient(Robot):
         # Incremented only when a new observation message is successfully decoded.
         # Callers can use this to distinguish a fresh remote frame from ``last_frames`` fallback.
         self._observation_sequence = 0
+        self.latest_host_timing: dict = {}
         self._lift_target_mm = None
 
         # Define three speed levels and a current index
@@ -174,11 +175,12 @@ class AlohaMiniClient(Robot):
     def calibrate(self) -> None:
         pass
 
-    def _send_observation_request(self) -> bytes | None:
+    def _send_observation_request(self, *, include_cameras: bool = True) -> bytes | None:
         """Send one observation request without waiting for its response."""
         zmq = self._zmq
         self._observation_request_id += 1
-        request_token = str(self._observation_request_id).encode("ascii")
+        response_kind = "camera" if include_cameras else "state"
+        request_token = f"{self._observation_request_id}:{response_kind}".encode("ascii")
 
         try:
             self.zmq_observation_socket.send(request_token, flags=zmq.NOBLOCK)
@@ -224,19 +226,19 @@ class AlohaMiniClient(Robot):
             return None
         return self._receive_observation_response(request_token, timeout_ms)
 
-    def _fill_observation_request_window(self) -> None:
+    def _fill_observation_request_window(self, *, include_cameras: bool = True) -> None:
         """Keep a bounded number of requests in flight to cover transport latency."""
         while len(self._observation_request_tokens) < self.observation_request_window:
-            request_token = self._send_observation_request()
+            request_token = self._send_observation_request(include_cameras=include_cameras)
             if request_token is None:
                 break
             self._observation_request_tokens.append(request_token)
 
-    def _poll_and_get_latest_message(self) -> list[bytes] | None:
+    def _poll_and_get_latest_message(self, *, include_cameras: bool = True) -> list[bytes] | None:
         """Consume the oldest response and replenish the bounded request window."""
 
         if not self._observation_request_tokens:
-            self._fill_observation_request_window()
+            self._fill_observation_request_window(include_cameras=include_cameras)
 
         message = (
             self._receive_observation_response(
@@ -253,7 +255,7 @@ class AlohaMiniClient(Robot):
         else:
             # Replenish before decoding the current frame so Host work and transport overlap
             # JPEG decoding, teleoperation, action sending, and dataset I/O.
-            self._fill_observation_request_window()
+            self._fill_observation_request_window(include_cameras=include_cameras)
         return message
 
     def _parse_observation_json(self, obs_data: str | bytes) -> RobotObservation | None:
@@ -362,7 +364,7 @@ class AlohaMiniClient(Robot):
 
         return encoded_frames, obs_dict
 
-    def _get_data(self) -> tuple[dict[str, np.ndarray], RobotObservation]:
+    def _get_data(self, *, include_cameras: bool = True) -> tuple[dict[str, np.ndarray], RobotObservation]:
         """
         Polls the video socket for the latest observation data.
 
@@ -374,7 +376,7 @@ class AlohaMiniClient(Robot):
         observation_start_t = time.perf_counter()
 
         # 1. Get the latest message from the socket
-        latest_message_parts = self._poll_and_get_latest_message()
+        latest_message_parts = self._poll_and_get_latest_message(include_cameras=include_cameras)
         receive_done_t = time.perf_counter()
 
         # 2. If no message, return cached data
@@ -396,6 +398,7 @@ class AlohaMiniClient(Robot):
             }
             return self.last_frames, self.last_remote_state
         observation, encoded_frames = parsed
+        self.latest_host_timing = dict(observation.get("_host_timing", {}))
 
         # 4. Process the valid observation data
         try:
@@ -418,13 +421,13 @@ class AlohaMiniClient(Robot):
         return self.last_frames, new_state
 
     @check_if_not_connected
-    def get_observation(self) -> RobotObservation:
+    def get_observation(self, *, include_cameras: bool = True) -> RobotObservation:
         """
         Capture observations from the remote robot: current follower arm positions,
         present wheel speeds (converted to body-frame velocities: x, y, theta),
         and a camera frame. Receives over ZMQ, translate to body-frame vel
         """
-        frames, obs_dict = self._get_data()
+        frames, obs_dict = self._get_data(include_cameras=include_cameras)
 
         # Always return every configured camera key. Dataset feature construction expects a stable
         # observation schema even if a frame is dropped or a camera has not produced data yet.

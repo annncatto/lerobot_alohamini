@@ -11,6 +11,8 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+from record_utils import record_loop
+
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.processor import make_default_processors
 from lerobot.robots.alohamini import AlohaMiniClient, AlohaMiniClientConfig
@@ -22,8 +24,6 @@ from lerobot.utils.feature_utils import hw_to_dataset_features
 from lerobot.utils.keyboard_input import init_keyboard_listener
 from lerobot.utils.utils import init_logging, log_say
 from lerobot.utils.visualization_utils import init_visualization, shutdown_visualization
-
-from record_utils import record_loop
 
 
 @contextmanager
@@ -238,7 +238,8 @@ def main():
         """Print one aggregated timing line without mixing it into the countdown row."""
         sys.stdout.write("\r\033[2K")
         print(
-            f"[PC TIMING avg ms/frame] FPS={timing['capture_fps']:.1f}/{args.fps} "
+            f"[PC TIMING avg ms/control] control={timing['control_fps']:.1f}/50Hz "
+            f"dataset={timing['capture_fps']:.1f}/{args.fps}Hz "
             f"obs={timing['observation']:.1f} obs_proc={timing['observation_processing']:.1f} "
             f"frame={timing['frame_build']:.1f} teleop={timing['teleop']:.1f} "
             f"send={timing['send_action']:.1f} dataset={timing['dataset_write']:.1f} "

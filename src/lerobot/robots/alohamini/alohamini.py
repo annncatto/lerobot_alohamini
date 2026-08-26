@@ -677,14 +677,39 @@ class AlohaMini(Robot):
         # their own async capture running; a full observation only fetches the latest
         # frames when a camera client has actually requested them.
         camera_timings_ms = {}
+        camera_capture_monotonic_s = {}
         if include_cameras:
             for cam_key, cam in self.cameras.items():
                 camera_start_t = time.perf_counter()
-                obs_dict[cam_key] = cam.async_read()
+                # Capture runs in one background thread per camera. Host control only
+                # peeks the bounded-age cache; the recorder, not this 50 Hz thread,
+                # decides whether all camera timestamps have advanced.
+                frame = cam.read_latest(max_age_ms=500)
+                capture_timestamp = getattr(cam, "latest_timestamp", None)
+                # Keep the pixel buffer and its capture timestamp from the same
+                # camera-thread update. A frame may arrive between read_latest()
+                # returning and metadata serialization.
+                frame_lock = getattr(cam, "frame_lock", None)
+                if frame_lock is not None:
+                    with frame_lock:
+                        latest_frame = getattr(cam, "latest_frame", None)
+                        latest_timestamp = getattr(cam, "latest_timestamp", None)
+                    if latest_frame is not None and latest_timestamp is not None:
+                        frame = latest_frame
+                        capture_timestamp = latest_timestamp
+                obs_dict[cam_key] = frame
+                if capture_timestamp is not None:
+                    camera_capture_monotonic_s[cam_key] = float(capture_timestamp)
                 camera_done_t = time.perf_counter()
                 dt_ms = (camera_done_t - camera_start_t) * 1e3
                 camera_timings_ms[f"camera_{cam_key}"] = dt_ms
                 logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
+
+        obs_dict["_host_timing"] = {
+            "state_sample_started_monotonic_s": observation_start_t,
+            "state_sample_finished_monotonic_s": lift_done_t,
+            "camera_capture_monotonic_s": camera_capture_monotonic_s,
+        }
 
         observation_done_t = time.perf_counter()
         self.logs["observation_timing_ms"] = {
