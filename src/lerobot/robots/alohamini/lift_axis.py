@@ -154,7 +154,7 @@ class LiftAxis:
         except Exception:
             pass
 
-    def apply_action(self, action: Dict[str, float]) -> None:
+    def apply_action(self, action: Dict[str, float], current_height_mm: float | None = None) -> None:
         """
         Supports two action keys:
         - f"{name}.height_mm": target height (mm)  (recommended)
@@ -166,7 +166,7 @@ class LiftAxis:
         key_v = f"{self.cfg.name}.vel"
         if key_h in action:
             target_mm = float(action[key_h])
-            cur_mm = self.get_height_mm()
+            cur_mm = self.get_height_mm() if current_height_mm is None else current_height_mm
             err = target_mm - cur_mm
             if abs(err) <= self.cfg.on_target_mm:
                 v_cmd = 0
@@ -196,7 +196,7 @@ class LiftAxis:
             v = max(-self.cfg.v_max, min(self.cfg.v_max, v))
             # Limit if already at boundary
             try:
-                cur_mm = self.get_height_mm()
+                cur_mm = self.get_height_mm() if current_height_mm is None else current_height_mm
                 # Descent floor guard
                 if v < 0 and cur_mm <= self.cfg.descent_floor_mm:
                     print(

@@ -17,6 +17,7 @@
 import argparse
 import json
 import logging
+import math
 import time
 
 import cv2
@@ -25,6 +26,157 @@ import zmq
 from .alohamini import AlohaMini
 from .camera_stream import CameraStreamPublisher
 from .config_alohamini import AlohaMiniConfig, AlohaMiniHostConfig
+
+
+class JointTrajectoryExecutor:
+    """Turn discontinuous joint targets into a gated, acceleration-limited trajectory.
+
+    Body joints share progress within each arm. The two arms and both grippers are gated
+    independently, so one lagging actuator cannot freeze unrelated robot motion.
+    """
+
+    def __init__(
+        self,
+        *,
+        max_velocity: float,
+        max_acceleration: float,
+        tracking_error_soft: float,
+        tracking_error_hard: float,
+    ) -> None:
+        if max_velocity <= 0 or max_acceleration <= 0:
+            raise ValueError("Trajectory velocity and acceleration limits must be positive.")
+        if tracking_error_soft < 0 or tracking_error_hard <= tracking_error_soft:
+            raise ValueError("tracking_error_hard must be greater than tracking_error_soft >= 0.")
+
+        self.max_velocity = float(max_velocity)
+        self.max_acceleration = float(max_acceleration)
+        self.tracking_error_soft = float(tracking_error_soft)
+        self.tracking_error_hard = float(tracking_error_hard)
+        self._target: dict[str, float] = {}
+        self._command: dict[str, float] = {}
+        self._velocity: dict[str, float] = {}
+        self._last_progress_scales: dict[str, float] = {}
+        self.last_tracking_error = 0.0
+        self.last_progress_scale = 1.0
+
+    @staticmethod
+    def _gate_group(key: str) -> str:
+        # Preserve coordinated motion within one arm, without allowing the other arm or
+        # a force-limited gripper to freeze the entire robot trajectory.
+        if key.endswith("_gripper.pos"):
+            return key
+        if key.startswith("arm_left_"):
+            return "arm_left"
+        if key.startswith("arm_right_"):
+            return "arm_right"
+        return key
+
+    def set_target(self, action: dict[str, float]) -> None:
+        for key, value in action.items():
+            if not key.endswith(".pos"):
+                continue
+            value = float(value)
+            if not math.isfinite(value):
+                logging.warning("Ignoring non-finite trajectory target %s=%s", key, value)
+                continue
+            self._target[key] = value
+
+    def hold(self) -> None:
+        """Stop trajectory progress at the last executable command."""
+        self._target = dict(self._command)
+        self._velocity = dict.fromkeys(self._velocity, 0.0)
+
+    def _progress_scales(self, measured: dict[str, float]) -> dict[str, float]:
+        group_errors: dict[str, float] = {}
+        for key, command in self._command.items():
+            if key not in measured:
+                continue
+            group = self._gate_group(key)
+            error = abs(command - float(measured[key]))
+            group_errors[group] = max(group_errors.get(group, 0.0), error)
+
+        self.last_tracking_error = max(group_errors.values(), default=0.0)
+        scales: dict[str, float] = {}
+        for group, error in group_errors.items():
+            if error <= self.tracking_error_soft:
+                scales[group] = 1.0
+            elif error >= self.tracking_error_hard:
+                scales[group] = 0.0
+            else:
+                scales[group] = (self.tracking_error_hard - error) / (
+                    self.tracking_error_hard - self.tracking_error_soft
+                )
+        self._last_progress_scales = scales
+        return scales
+
+    def joint_diagnostics(
+        self,
+        measured: dict[str, float],
+        currents_ma: dict[str, float] | None = None,
+    ) -> dict[str, dict[str, float]]:
+        """Return one coherent target -> command -> feedback snapshot per active joint."""
+        currents_ma = currents_ma or {}
+        diagnostics: dict[str, dict[str, float]] = {}
+        for key, command in sorted(self._command.items()):
+            if key not in measured:
+                continue
+            measured_value = float(measured[key])
+            motor = key.removesuffix(".pos")
+            diagnostics[motor] = {
+                "target": float(self._target.get(key, command)),
+                "command": float(command),
+                "measured": measured_value,
+                "error": float(command) - measured_value,
+                "velocity": float(self._velocity.get(key, 0.0)),
+                "current_ma": float(currents_ma.get(motor, math.nan)),
+                "progress_scale": float(
+                    self._last_progress_scales.get(self._gate_group(key), 1.0)
+                ),
+            }
+        return diagnostics
+
+    def step(self, measured: dict[str, float], dt_s: float) -> dict[str, float]:
+        dt_s = max(0.0, float(dt_s))
+        for key, target in self._target.items():
+            if key not in self._command:
+                # Start at feedback, never at the first possibly discontinuous target.
+                self._command[key] = float(measured.get(key, target))
+                self._velocity[key] = 0.0
+
+        scales = self._progress_scales(measured)
+        self.last_progress_scale = min(scales.values(), default=1.0)
+        if dt_s == 0.0:
+            return dict(self._command)
+
+        acceleration_step = self.max_acceleration * dt_s
+        for key, target in self._target.items():
+            scale = scales.get(self._gate_group(key), 1.0)
+            if scale == 0.0:
+                self._velocity[key] = 0.0
+                continue
+            command = self._command[key]
+            remaining = target - command
+            if remaining == 0.0:
+                self._velocity[key] = 0.0
+                continue
+
+            # The braking-speed bound makes each segment stop at its target without
+            # overshoot, while the acceleration clamp removes velocity discontinuities.
+            braking_speed = math.sqrt(2.0 * self.max_acceleration * abs(remaining))
+            desired_speed = math.copysign(
+                min(self.max_velocity * scale, braking_speed), remaining
+            )
+            velocity = self._velocity[key]
+            velocity += max(-acceleration_step, min(acceleration_step, desired_speed - velocity))
+            delta = velocity * dt_s
+            if delta * remaining > 0.0 and abs(delta) >= abs(remaining):
+                self._command[key] = target
+                self._velocity[key] = 0.0
+            else:
+                self._command[key] = command + delta
+                self._velocity[key] = velocity
+
+        return dict(self._command)
 
 
 class AlohaMiniHost:
@@ -45,12 +197,18 @@ class AlohaMiniHost:
         self.connection_time_s = config.connection_time_s
         self.watchdog_timeout_ms = config.watchdog_timeout_ms
         self.max_loop_freq_hz = config.max_loop_freq_hz
+        self.trajectory = JointTrajectoryExecutor(
+            max_velocity=config.trajectory_max_velocity,
+            max_acceleration=config.trajectory_max_acceleration,
+            tracking_error_soft=config.tracking_error_soft,
+            tracking_error_hard=config.tracking_error_hard,
+        )
 
     def disconnect(self):
         self.zmq_observation_socket.close()
         self.zmq_cmd_socket.close()
         self.zmq_context.term()
- 
+
 
 def _jsonable(value):
     """Convert numpy scalars to JSON-native values without touching normal Python values."""
@@ -65,7 +223,12 @@ def _jsonable(value):
 def build_observation_multipart(
     observation: dict, camera_keys, encoded_camera_keys=None
 ) -> list[bytes]:
-    """Encode state as JSON and selected camera images as binary JPEG frames."""
+    """Encode state as JSON and selected camera images as binary JPEG frames.
+
+    ``camera_keys`` identifies all image fields that must be excluded from JSON.
+    ``encoded_camera_keys`` selects which images to append. Passing an empty iterable
+    produces the strict two-frame ROUTER response required by ROS ``:state`` requests.
+    """
     camera_keys = tuple(camera_keys)
     encoded_camera_keys = camera_keys if encoded_camera_keys is None else tuple(encoded_camera_keys)
     state_observation = {
@@ -92,7 +255,7 @@ def build_observation_multipart(
 
 
 def build_robot_metadata(robot: AlohaMini) -> dict:
-    """Describe connected hardware so ROS can validate model and joint units."""
+    """Describe the connected Host hardware for ROS unit and model validation."""
     motors = {}
     for bus in (robot.left_bus, robot.right_bus):
         if bus is None:
@@ -122,11 +285,6 @@ def build_robot_metadata(robot: AlohaMini) -> dict:
             "descent_floor_mm": float(robot.lift.cfg.descent_floor_mm),
         }
     return metadata
-
-
-def observation_request_includes_cameras(request_token: bytes | None) -> bool:
-    """Keep legacy/plain requests full while allowing ROS state-only requests."""
-    return request_token is not None and not request_token.endswith(b":state")
 
 
 def parse_bool(value: str | bool) -> bool:
@@ -177,15 +335,28 @@ def main():
         ),
     )
     parser.add_argument(
-        "--camera-stream",
-        action="store_true",
-        help="Publish the optional ROS camera stream on port 5557.",
+        "--trajectory-max-velocity",
+        type=float,
+        default=None,
+        help="Host arm trajectory velocity limit in configured position units/s.",
     )
     parser.add_argument(
-        "--camera-stream-port",
-        type=int,
+        "--trajectory-max-acceleration",
+        type=float,
         default=None,
-        help="Override the dedicated ROS camera PUB port.",
+        help="Host arm trajectory acceleration limit in configured position units/s^2.",
+    )
+    parser.add_argument(
+        "--tracking-error-soft",
+        type=float,
+        default=None,
+        help="Start slowing an arm group above this command-to-feedback position error.",
+    )
+    parser.add_argument(
+        "--tracking-error-hard",
+        type=float,
+        default=None,
+        help="Freeze only the lagging arm group above this position error.",
     )
     args = parser.parse_args()
 
@@ -205,9 +376,15 @@ def main():
 
     logging.info("Starting HostAgent")
     host_config = AlohaMiniHostConfig()
-    host_config.camera_stream_enabled = args.camera_stream
-    if args.camera_stream_port is not None:
-        host_config.port_zmq_camera_stream = args.camera_stream_port
+    for field_name in (
+        "trajectory_max_velocity",
+        "trajectory_max_acceleration",
+        "tracking_error_soft",
+        "tracking_error_hard",
+    ):
+        cli_value = getattr(args, field_name)
+        if cli_value is not None:
+            setattr(host_config, field_name, cli_value)
     host = AlohaMiniHost(host_config)
     camera_stream = (
         CameraStreamPublisher(
@@ -231,8 +408,10 @@ def main():
             host_config.port_zmq_camera_stream,
         )
 
-    last_cmd_time = time.time()
+    last_cmd_time = time.monotonic()
     watchdog_active = False
+    has_received_command = False
+    passthrough_action: dict[str, float] = {}
     logging.info("Waiting for commands...")
 
     try:
@@ -244,12 +423,19 @@ def main():
         timing_totals_ms: dict[str, float] = {}
         timing_command_count = 0
         action_timing_totals_ms: dict[str, float] = {}
+        last_control_t = start - 1.0 / host.max_loop_freq_hz
 
         while duration < host.connection_time_s:
             loop_start_t = time.perf_counter()
+            control_dt_s = min(
+                loop_start_t - last_control_t,
+                2.0 / host.max_loop_freq_hz,
+            )
+            last_control_t = loop_start_t
 
-            # A ``:state`` request deliberately bypasses camera acquisition. Plain
-            # legacy request tokens still receive the original full observation.
+            # Poll the request before sampling the robot. State-only ROS clients do not
+            # put camera retrieval in the control critical path; full LeRobot clients
+            # still receive the latest frames in their requested cycle.
             request_identity = None
             request_token = None
             try:
@@ -259,17 +445,28 @@ def main():
             except zmq.Again:
                 pass
             request_poll_done_t = time.perf_counter()
-            include_cameras = observation_request_includes_cameras(request_token)
+            include_cameras = request_token is not None and not request_token.endswith(b":state")
 
-            command_received = False
+            # One feedback snapshot owns the complete observe -> trajectory -> act
+            # cycle. send_action() reuses its position/current values for safety limits.
+            last_observation = robot.get_observation(include_cameras=include_cameras)
+            # send_action() consumes/clears this cycle's cached feedback. Preserve only
+            # the small current snapshot needed by the once-per-second tracking report.
+            tracking_currents_ma = {
+                motor: float(raw) * 6.5
+                for motor, raw in robot._feedback_currents_raw.items()
+            }
+            observation_done_t = time.perf_counter()
+
             try:
                 msg = host.zmq_cmd_socket.recv_string(zmq.NOBLOCK)
                 data = dict(json.loads(msg))
-                #print(f"Received action: {data}")   # debug 
-                _action_sent = robot.send_action(data)
-                command_received = True
-                
-                last_cmd_time = time.time()
+                host.trajectory.set_target(data)
+                passthrough_action = {
+                    key: float(value) for key, value in data.items() if not key.endswith(".pos")
+                }
+                has_received_command = True
+                last_cmd_time = time.monotonic()
                 watchdog_active = False
             except zmq.Again:
                 pass
@@ -277,29 +474,29 @@ def main():
                 logging.exception("Message fetching failed: %s", e)
             command_done_t = time.perf_counter()
 
-            now = time.time()
+            now = time.monotonic()
             if (now - last_cmd_time > host.watchdog_timeout_ms / 1000) and not watchdog_active:
                 logging.warning(
                     f"Command not received for more than {host.watchdog_timeout_ms} milliseconds. Stopping robot motion."
                 )
                 watchdog_active = True
+                host.trajectory.hold()
+                passthrough_action = {"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0}
                 robot.stop_motion()
 
-            # Keep the original Host ordering: apply the newest command before
-            # sampling the observation returned in this cycle.
-            last_observation = robot.get_observation(include_cameras=include_cameras)
-            observation_done_t = time.perf_counter()
+            action_sent = False
+            if has_received_command:
+                executable_positions = host.trajectory.step(last_observation, control_dt_s)
+                robot.send_action({**passthrough_action, **executable_positions})
+                action_sent = True
+            action_done_t = time.perf_counter()
 
-            encode_done_t = observation_done_t
+            encode_done_t = action_done_t
             if request_identity is not None and request_token is not None:
                 camera_keys = tuple(robot.cameras.keys())
                 encoded_camera_keys = () if request_token.endswith(b":state") else camera_keys
-                response_observation = {
-                    **last_observation,
-                    "_robot_metadata": robot_metadata,
-                }
                 observation_parts = build_observation_multipart(
-                    response_observation,
+                    {**last_observation, "_robot_metadata": robot_metadata},
                     camera_keys,
                     encoded_camera_keys,
                 )
@@ -319,10 +516,11 @@ def main():
             loop_done_t = time.perf_counter()
 
             loop_timings_ms = {
-                "command": (command_done_t - request_poll_done_t) * 1e3,
-                "robot_observation": (observation_done_t - command_done_t) * 1e3,
+                "command": (command_done_t - observation_done_t) * 1e3,
+                "robot_observation": (observation_done_t - request_poll_done_t) * 1e3,
+                "trajectory_action": (action_done_t - command_done_t) * 1e3,
                 "request_poll": (request_poll_done_t - loop_start_t) * 1e3,
-                "jpeg_encode": (encode_done_t - observation_done_t) * 1e3,
+                "jpeg_encode": (encode_done_t - action_done_t) * 1e3,
                 "response_send": (response_send_done_t - encode_done_t) * 1e3,
                 "sleep": (loop_done_t - response_send_done_t) * 1e3,
                 "loop": (loop_done_t - loop_start_t) * 1e3,
@@ -331,7 +529,7 @@ def main():
             for name, value_ms in loop_timings_ms.items():
                 timing_totals_ms[name] = timing_totals_ms.get(name, 0.0) + value_ms
             timing_loop_count += 1
-            if command_received:
+            if action_sent:
                 for name, value_ms in robot.logs.get("action_timing_ms", {}).items():
                     action_timing_totals_ms[name] = action_timing_totals_ms.get(name, 0.0) + value_ms
                 timing_command_count += 1
@@ -349,6 +547,7 @@ def main():
                 print(
                     f"[HOST TIMING avg ms/loop] Hz={timing_loop_count / timing_elapsed_s:.1f} "
                     f"cmd={averages['command']:.1f} robot_obs={averages['robot_observation']:.1f} "
+                    f"trajectory_action={averages['trajectory_action']:.1f} "
                     f"left={averages.get('left_arm', 0.0):.1f} base={averages.get('base', 0.0):.1f} "
                     f"right={averages.get('right_arm', 0.0):.1f} lift={averages.get('lift', 0.0):.1f} "
                     f"currents={averages.get('currents', 0.0):.1f} {camera_text} "
@@ -371,7 +570,7 @@ def main():
                         for name, total_ms in action_timing_totals_ms.items()
                     }
                     print(
-                        f"[HOST ACTION avg ms/command] n={timing_command_count} "
+                        f"[HOST ACTION avg ms/control-cycle] n={timing_command_count} "
                         f"prepare={action_averages.get('action_prepare', 0.0):.1f} "
                         f"lift={action_averages.get('action_lift', 0.0):.1f} "
                         f"relative={action_averages.get('action_relative_limit', 0.0):.1f} "
@@ -383,6 +582,30 @@ def main():
                         f"right_write={action_averages.get('action_right_write', 0.0):.1f} "
                         f"base_write={action_averages.get('action_base_write', 0.0):.1f} "
                         f"total={action_averages.get('action_total', 0.0):.1f}",
+                        flush=True,
+                    )
+                print(
+                    f"[HOST TRACKING] max_error={host.trajectory.last_tracking_error:.2f} "
+                    f"min_progress={host.trajectory.last_progress_scale:.2f}",
+                    flush=True,
+                )
+                for motor, values in host.trajectory.joint_diagnostics(
+                    last_observation, tracking_currents_ma
+                ).items():
+                    current_text = (
+                        "n/a"
+                        if math.isnan(values["current_ma"])
+                        else f"{values['current_ma']:+.1f}mA"
+                    )
+                    print(
+                        f"[HOST TRACKING][{motor}] "
+                        f"target={values['target']:.2f} "
+                        f"command={values['command']:.2f} "
+                        f"measured={values['measured']:.2f} "
+                        f"error={values['error']:+.2f} "
+                        f"velocity={values['velocity']:+.2f}/s "
+                        f"current={current_text} "
+                        f"progress_scale={values['progress_scale']:.2f}",
                         flush=True,
                     )
                 timing_report_start_t = loop_done_t
