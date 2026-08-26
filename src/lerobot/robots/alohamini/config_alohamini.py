@@ -84,7 +84,20 @@ class AlohaMiniHostConfig:
     watchdog_timeout_ms: int = 1000
 
     # If robot jitters decrease the frequency and monitor cpu load with `top` in cmd
-    max_loop_freq_hz: int = 30
+    max_loop_freq_hz: int = 50
+
+    # Host-side arm trajectory execution. Incoming ROS/teleoperation positions are
+    # targets, not values that are written directly to the servos.
+    # Responsive enough for 50 Hz leader/Joy-Con target streams while still bounding
+    # discontinuous or malformed upstream position jumps.
+    trajectory_max_velocity: float = 240.0
+    trajectory_max_acceleration: float = 2400.0
+
+    # Slow the whole arm trajectory when a joint starts lagging, and freeze trajectory
+    # progress at the hard threshold. Units match the configured arm position units
+    # (degrees when use_degrees=True, otherwise normalized position units).
+    tracking_error_soft: float = 10.0
+    tracking_error_hard: float = 30.0
 
 
 
@@ -126,6 +139,6 @@ class AlohaMiniClientConfig(RobotConfig):
 
     cameras: dict[str, CameraConfig] = field(default_factory=alohamini_cameras_config)
 
-    # Must exceed one host cycle at 30 Hz for request/reply observation transport.
+    # Must exceed one host cycle at 50 Hz for request/reply observation transport.
     polling_timeout_ms: int = 200
     connect_timeout_s: int = 5
