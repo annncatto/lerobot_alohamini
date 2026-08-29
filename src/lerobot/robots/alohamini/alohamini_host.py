@@ -297,6 +297,11 @@ def build_robot_metadata(robot: AlohaMini) -> dict:
     return metadata
 
 
+def observation_request_includes_cameras(request_token: bytes | None) -> bool:
+    """Keep legacy/plain requests full while allowing ROS state-only requests."""
+    return request_token is not None and not request_token.endswith(b":state")
+
+
 def parse_bool(value: str | bool) -> bool:
     if isinstance(value, bool):
         return value
@@ -351,6 +356,17 @@ def main():
         help="Host arm trajectory velocity limit in configured position units/s.",
     )
     parser.add_argument(
+        "--camera-stream",
+        action="store_true",
+        help="Publish the optional non-blocking ROS camera stream on port 5557.",
+    )
+    parser.add_argument(
+        "--camera-stream-port",
+        type=int,
+        default=None,
+        help="Override the dedicated ROS camera PUB port.",
+    )
+    parser.add_argument(
         "--trajectory-max-acceleration",
         type=float,
         default=None,
@@ -386,6 +402,9 @@ def main():
 
     logging.info("Starting HostAgent")
     host_config = AlohaMiniHostConfig()
+    host_config.camera_stream_enabled = args.camera_stream
+    if args.camera_stream_port is not None:
+        host_config.port_zmq_camera_stream = args.camera_stream_port
     for field_name in (
         "trajectory_max_velocity",
         "trajectory_max_acceleration",
@@ -396,6 +415,27 @@ def main():
         if cli_value is not None:
             setattr(host_config, field_name, cli_value)
     host = AlohaMiniHost(host_config)
+    camera_stream = (
+        CameraStreamPublisher(
+            robot.cameras,
+            port=host_config.port_zmq_camera_stream,
+            jpeg_quality=host_config.camera_stream_jpeg_quality,
+            max_age_ms=host_config.camera_stream_max_age_ms,
+        )
+        if host_config.camera_stream_enabled and robot.cameras
+        else None
+    )
+    if camera_stream is not None:
+        try:
+            camera_stream.start()
+        except Exception:
+            host.disconnect()
+            robot.disconnect()
+            raise
+        logging.info(
+            "Camera stream publishing on tcp://*:%d",
+            host_config.port_zmq_camera_stream,
+        )
     jpeg_executor = ThreadPoolExecutor(
         max_workers=max(1, len(robot.cameras)),
         thread_name_prefix="alohamini-jpeg",
@@ -443,7 +483,7 @@ def main():
                 except zmq.Again:
                     pass
             request_poll_done_t = time.perf_counter()
-            include_cameras = request_token is not None and not request_token.endswith(b":state")
+            include_cameras = observation_request_includes_cameras(request_token)
 
             # One feedback snapshot owns the complete observe -> trajectory -> act
             # cycle. send_action() reuses its position/current values for safety limits.
@@ -659,6 +699,8 @@ def main():
         print("Keyboard interrupt received. Exiting...")
     finally:
         print("Shutting down AlohaMini Host.")
+        if camera_stream is not None:
+            camera_stream.stop()
         jpeg_executor.shutdown(wait=True, cancel_futures=True)
         robot.disconnect()
         host.disconnect()

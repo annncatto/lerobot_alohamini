@@ -183,7 +183,7 @@ python -m lerobot.robots.alohamini.alohamini_host --robot_model alohamini2 --no_
 ```
 
 ROS-compatible camera publishing is opt-in and does not change the default
-camera set or 30 Hz Host rate:
+two-camera set. This branch runs Host control at 50 Hz:
 
 ```bash
 python -m lerobot.robots.alohamini.alohamini_host \
@@ -194,9 +194,10 @@ python -m lerobot.robots.alohamini.alohamini_host \
 The Host uses TCP 5555 for commands, 5556 for observations and metadata, and
 5557 for the optional camera-only stream. Plain 5556 requests retain the legacy
 state-plus-image response; request tokens ending in `:state` return state only.
-This protocol remains functional with a 50 Hz ROS bridge, although actual motor
-updates still follow the Host's 30 Hz loop. Use the separate 50 Hz Host change
-when matching 50 Hz hardware execution is required.
+Native teleoperation defaults to 50 Hz control and 30 Hz camera requests. These
+can be set explicitly with `--fps 50 --camera-fps 30`. Dataset recording keeps
+50 Hz control internally while committing only fresh, timestamp-aligned images,
+state, and action at the dataset `--dataset.fps` (normally 30 Hz).
 
 ## Teleoperation
 

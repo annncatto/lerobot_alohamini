@@ -118,6 +118,11 @@ class AlohaMiniClientConfig(RobotConfig):
     port_zmq_observations: int = 5556
     observation_request_window: int = 3
 
+    # Keyboard lift control advances an absolute height target while held. Bound
+    # its lead over measured feedback so release and reversal stay responsive.
+    lift_target_speed_mm_s: float = 150.0
+    lift_target_max_lead_mm: float = 50.0
+
     # Must match the robot_model used on the host side so that _state_ft keys are consistent.
     # alohamini1   – so-arm-5dof (6 joints per arm, no wrist_yaw)
     # alohamini2   – am-follower-6dof (7 joints per arm, includes wrist_yaw)

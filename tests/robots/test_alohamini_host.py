@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from lerobot.robots.alohamini import alohamini_client as alohamini_client_module
 from lerobot.robots.alohamini.alohamini import AlohaMini
 from lerobot.robots.alohamini.alohamini_client import AlohaMiniClient
 from lerobot.robots.alohamini.alohamini_host import (
@@ -12,6 +13,7 @@ from lerobot.robots.alohamini.alohamini_host import (
     build_observation_multipart,
     build_robot_metadata,
 )
+from lerobot.robots.alohamini.lift_axis import LiftAxis, LiftAxisConfig
 
 
 def make_executor() -> JointTrajectoryExecutor:
@@ -267,6 +269,63 @@ def test_robot_metadata_describes_normalization_and_calibration() -> None:
         "soft_max_mm": 600.0,
         "descent_floor_mm": 5.0,
     }
+
+
+def test_client_lift_target_is_absolute_bounded_and_has_one_control_semantic(
+    monkeypatch,
+) -> None:
+    client = object.__new__(AlohaMiniClient)
+    client.teleop_keys = {"lift_up": "u", "lift_down": "j"}
+    client.last_remote_state = {"lift_axis.height_mm": 100.0}
+    client.latest_robot_metadata = {
+        "lift_axis": {"soft_min_mm": 0.0, "soft_max_mm": 600.0}
+    }
+    client.config = SimpleNamespace(
+        lift_target_speed_mm_s=150.0,
+        lift_target_max_lead_mm=5.0,
+    )
+    client._lift_target_mm = None
+    client._lift_last_update_t = None
+    client._lift_direction = 0
+    times = iter((1.0, 1.02, 1.04))
+    monkeypatch.setattr(alohamini_client_module.time, "monotonic", lambda: next(times))
+
+    first = client._from_keyboard_to_lift_action({"u"})
+    second = client._from_keyboard_to_lift_action({"u"})
+    released = client._from_keyboard_to_lift_action(set())
+
+    assert first == {"lift_axis.height_mm": pytest.approx(103.0)}
+    assert second == {"lift_axis.height_mm": pytest.approx(105.0)}
+    assert released == {"lift_axis.height_mm": pytest.approx(100.0)}
+    assert "lift_axis.vel" not in released
+
+
+def test_lift_axis_clamps_absolute_target_and_prioritizes_position() -> None:
+    writes = []
+    bus = SimpleNamespace(
+        motors={"lift_axis": object()},
+        write=lambda register, motor, value: writes.append((register, motor, value)),
+    )
+    lift = LiftAxis(
+        LiftAxisConfig(soft_min_mm=0.0, soft_max_mm=600.0, dir_sign=-1),
+        bus_left=bus,
+        bus_right=None,
+    )
+
+    accepted = lift.apply_action(
+        {"lift_axis.height_mm": 700.0, "lift_axis.vel": 0.0},
+        current_height_mm=100.0,
+    )
+
+    assert accepted == {"lift_axis.height_mm": 600.0}
+    assert writes == [("Goal_Velocity", "lift_axis", -1300)]
+
+
+def test_lift_axis_returns_empty_mapping_without_lift_command() -> None:
+    bus = SimpleNamespace(motors={"lift_axis": object()})
+    lift = LiftAxis(LiftAxisConfig(), bus_left=bus, bus_right=None)
+
+    assert lift.apply_action({"arm_left_shoulder_pan.pos": 12.0}) == {}
 
 
 class FakeBus:

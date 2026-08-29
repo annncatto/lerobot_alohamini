@@ -705,9 +705,21 @@ class AlohaMini(Robot):
                 camera_timings_ms[f"camera_{cam_key}"] = dt_ms
                 logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
 
+        clock_reference_monotonic_s = time.perf_counter()
+        clock_reference_unix_ns = time.time_ns()
+        state_sample_midpoint_monotonic_s = (observation_start_t + lift_done_t) / 2.0
         obs_dict["_host_timing"] = {
             "state_sample_started_monotonic_s": observation_start_t,
             "state_sample_finished_monotonic_s": lift_done_t,
+            "state_sample_unix_ns": clock_reference_unix_ns
+            - round(
+                (clock_reference_monotonic_s - state_sample_midpoint_monotonic_s)
+                * 1e9
+            ),
+            "host_clock_reference": {
+                "monotonic_s": clock_reference_monotonic_s,
+                "unix_ns": clock_reference_unix_ns,
+            },
             "camera_capture_monotonic_s": camera_capture_monotonic_s,
         }
 
@@ -761,7 +773,9 @@ class AlohaMini(Robot):
         #     arm_safe_goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
         #     arm_goal_pos = arm_safe_goal_pos
 
-        self.lift.apply_action(action, current_height_mm=self._feedback_lift_height_mm)
+        lift_sent = self.lift.apply_action(
+            action, current_height_mm=self._feedback_lift_height_mm
+        )
         lift_action_done_t = time.perf_counter()
 
         if left_pos and self.config.max_relative_target is not None:
@@ -835,7 +849,6 @@ class AlohaMini(Robot):
         self._feedback_currents_raw.clear()
         self._feedback_lift_height_mm = None
 
-        lift_sent = {k: v for k, v in action.items() if k.startswith("lift_axis.")}
         return {**left_pos, **right_pos, **base_goal_vel, **lift_sent}
 
     def _limit_gripper_goal_by_current(self, bus, goal_pos: dict[str, float]) -> dict[str, float]:

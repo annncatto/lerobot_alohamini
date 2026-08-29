@@ -15,14 +15,11 @@
 # TODO(aliberts, Steven, Pepijn): use gRPC calls instead of zmq?
 
 import base64
-import inspect
 import json
 import logging
 import time
 from collections import deque
 from functools import cached_property
-import os
-from typing import Any
 
 import cv2
 import numpy as np
@@ -34,11 +31,11 @@ from lerobot.utils.errors import DeviceNotConnectedError
 
 from ..robot import Robot
 from .config_alohamini import AlohaMiniClientConfig
-from .model_specs import arm_state_keys_for_robot_model
 from .lift_axis import LiftAxisConfig
+from .model_specs import arm_state_keys_for_robot_model
 
 logging.basicConfig(
-    #level=logging.INFO,  
+    #level=logging.INFO,
     format="[%(filename)s:%(lineno)d] %(message)s"
 )
 
@@ -80,7 +77,10 @@ class AlohaMiniClient(Robot):
         # Callers can use this to distinguish a fresh remote frame from ``last_frames`` fallback.
         self._observation_sequence = 0
         self.latest_host_timing: dict = {}
+        self.latest_robot_metadata: dict = {}
         self._lift_target_mm = None
+        self._lift_last_update_t: float | None = None
+        self._lift_direction = 0
 
         # Define three speed levels and a current index
         self.speed_levels = [
@@ -359,7 +359,7 @@ class AlohaMiniClient(Robot):
         #lineno = frame.f_lineno
         #print(f"[{filename}:{lineno}] obs_dict:{obs_dict}")
         #print(f"[{filename}:{frame.f_lineno}] obs_dict:{obs_dict}")
-        
+
         #logging.warning("obs_dict: %s", obs_dict)
 
         return encoded_frames, obs_dict
@@ -399,6 +399,7 @@ class AlohaMiniClient(Robot):
             return self.last_frames, self.last_remote_state
         observation, encoded_frames = parsed
         self.latest_host_timing = dict(observation.get("_host_timing", {}))
+        self.latest_robot_metadata = dict(observation.get("_robot_metadata", {}))
 
         # 4. Process the valid observation data
         try:
@@ -474,7 +475,7 @@ class AlohaMiniClient(Robot):
             "y.vel": y_cmd,
             "theta.vel": theta_cmd,
         }
-    
+
     # lift_axis.vel
     # def _from_keyboard_to_lift_action(self, pressed_keys: np.ndarray):
     #     LIFT_VEL = 1000  # adjust if too slow/fast
@@ -488,29 +489,49 @@ class AlohaMiniClient(Robot):
     #     else:
     #         v = 0.0
     #     return {"lift_axis.vel": int(v)}
-    
+
 
     # lift_axis.height_mm
     def _from_keyboard_to_lift_action(self, pressed_keys: np.ndarray):
         up_pressed = self.teleop_keys.get("lift_up", "u") in pressed_keys
         dn_pressed = self.teleop_keys.get("lift_down", "j") in pressed_keys
-        now_pressed = up_pressed or dn_pressed
+        direction = int(up_pressed) - int(dn_pressed)
 
-        # Read the last height (mm) reported by the Host
+        # Use physical height, not the servo's wrapping single-turn register.
         h_now = float(self.last_remote_state.get("lift_axis.height_mm", 0.0))
+        now = time.monotonic()
+        default_lift_config = LiftAxisConfig()
+        lift_metadata = self.latest_robot_metadata.get("lift_axis", {})
+        soft_min_mm = float(
+            lift_metadata.get("soft_min_mm", default_lift_config.soft_min_mm)
+        )
+        soft_max_mm = float(
+            lift_metadata.get("soft_max_mm", default_lift_config.soft_max_mm)
+        )
 
-        if not now_pressed:
-            return {"lift_axis.height_mm": h_now, "lift_axis.vel": 0}
-
-        step_mm = 50.0
-        if up_pressed and not dn_pressed:
-            target = h_now + step_mm
-        elif dn_pressed and not up_pressed:
-            target = h_now - step_mm
+        # Release, opposing keys, and direction changes re-latch to feedback.
+        if direction == 0:
+            self._lift_target_mm = h_now
         else:
-            target = h_now
+            relatch = self._lift_target_mm is None or direction != self._lift_direction
+            if relatch:
+                self._lift_target_mm = h_now
+            dt = (
+                1.0 / 50.0
+                if self._lift_last_update_t is None or relatch
+                else min(max(now - self._lift_last_update_t, 0.0), 0.1)
+            )
+            self._lift_target_mm += direction * self.config.lift_target_speed_mm_s * dt
+            max_lead_mm = self.config.lift_target_max_lead_mm
+            self._lift_target_mm = min(
+                max(self._lift_target_mm, h_now - max_lead_mm),
+                h_now + max_lead_mm,
+            )
 
-        return {"lift_axis.height_mm": target}
+        self._lift_target_mm = min(max(self._lift_target_mm, soft_min_mm), soft_max_mm)
+        self._lift_last_update_t = now
+        self._lift_direction = direction
+        return {"lift_axis.height_mm": self._lift_target_mm}
 
 
 

@@ -23,10 +23,10 @@ from lerobot.robots.alohamini.config_alohamini import (
 )
 
 
-def test_original_defaults_remain_30_hz_two_camera_and_no_ros_stream() -> None:
+def test_50hz_branch_keeps_original_camera_defaults_and_ros_stream_opt_in() -> None:
     assert set(alohamini_cameras_config()) == {"forward", "wrist_right"}
     config = AlohaMiniHostConfig()
-    assert config.max_loop_freq_hz == 30
+    assert config.max_loop_freq_hz == 50
     assert config.camera_stream_enabled is False
 
 
