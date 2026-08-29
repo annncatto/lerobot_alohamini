@@ -1,13 +1,15 @@
 #!/usr/bin/env python
 
+import importlib
 from collections import deque
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
-from examples.alohamini import record_utils
-from examples.alohamini.record_utils import (
+from examples.alohamini import record_utils_multirate
+from examples.alohamini.record_utils_multirate import (
     ControlSample,
     ControlSampleBuffer,
     FreshCameraGate,
@@ -149,7 +151,7 @@ class FakeRobot:
     def prime_observation_request_window(self, *, include_cameras: bool) -> None:
         self.primed.append(include_cameras)
 
-    def get_observation(self, *, include_cameras: bool):
+    def get_observation(self, *, include_cameras: bool = True):
         timestamp = self.clock.now
         camera_timestamps = {}
         if include_cameras and self._cameras_ft:
@@ -193,12 +195,12 @@ def run_fake_recording(
         10,
         with_camera=with_camera if dataset_with_camera is None else dataset_with_camera,
     )
-    monkeypatch.setattr(record_utils.time, "perf_counter", clock.perf_counter)
-    monkeypatch.setattr(record_utils, "precise_sleep", clock.sleep)
+    monkeypatch.setattr(record_utils_multirate.time, "perf_counter", clock.perf_counter)
+    monkeypatch.setattr(record_utils_multirate, "precise_sleep", clock.sleep)
     def identity(value):
         return value
 
-    record_utils.record_loop(
+    record_utils_multirate.record_loop(
         robot=robot,
         events={"exit_early": False},
         fps=10,
@@ -215,6 +217,15 @@ def run_fake_recording(
         min_capture_rate_ratio=0.5,
     )
     return robot, dataset, clock
+
+
+def test_default_recorder_keeps_the_original_single_rate_loop(monkeypatch) -> None:
+    examples_dir = Path(__file__).parents[2] / "examples" / "alohamini"
+    monkeypatch.syspath_prepend(str(examples_dir))
+    record_bi = importlib.import_module("record_bi")
+    default_record_utils = importlib.import_module("record_utils")
+
+    assert record_bi.record_loop is default_record_utils.record_loop
 
 
 def test_record_loop_records_state_only_dataset_at_dataset_rate(monkeypatch) -> None:
