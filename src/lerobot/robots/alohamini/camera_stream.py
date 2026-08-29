@@ -228,4 +228,3 @@ class CameraStreamPublisher:
         finally:
             socket.close(linger=0)
             context.term()
-
