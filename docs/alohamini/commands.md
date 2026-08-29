@@ -197,7 +197,12 @@ state-plus-image response; request tokens ending in `:state` return state only.
 Native teleoperation defaults to 50 Hz control and 30 Hz camera requests. These
 can be set explicitly with `--fps 50 --camera-fps 30`. Dataset recording keeps
 50 Hz control internally while committing only fresh, timestamp-aligned images,
-state, and action at the dataset `--dataset.fps` (normally 30 Hz).
+state, and action at the dataset `--dataset.fps` (normally 30 Hz). Camera
+episodes collect the requested frame count, so a physical camera running at
+29.5 Hz may extend wall-clock recording slightly instead of duplicating frames
+or shortening the dataset timeline. Recording stops with an explicit error if a
+camera timestamp stalls, multi-camera skew exceeds 50 ms, state alignment
+exceeds 100 ms, or the fresh-frame rate falls below 90% of the requested rate.
 
 ## Teleoperation
 

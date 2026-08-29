@@ -244,7 +244,8 @@ def main():
             f"frame={timing['frame_build']:.1f} teleop={timing['teleop']:.1f} "
             f"send={timing['send_action']:.1f} dataset={timing['dataset_write']:.1f} "
             f"display={timing['display']:.1f} sleep={timing['sleep']:.1f} "
-            f"loop={timing['loop']:.1f}",
+            f"loop={timing['loop']:.1f} camera_skew={timing['camera_skew_ms']:.1f}ms "
+            f"state_align={timing['state_alignment_ms']:.1f}ms",
             flush=True,
         )
         decode_text = " ".join(

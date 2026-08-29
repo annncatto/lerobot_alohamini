@@ -234,6 +234,20 @@ class AlohaMiniClient(Robot):
                 break
             self._observation_request_tokens.append(request_token)
 
+    def prime_observation_request_window(self, *, include_cameras: bool) -> None:
+        """Drain prefetched responses and refill the window with one payload kind.
+
+        Recording alternates state-only and camera requests. Setup and reset may
+        leave a full window of camera requests in flight; returning those at the
+        start of an episode creates an unintended image burst. Drain the bounded
+        window before establishing the episode's initial state-only pipeline.
+        """
+        while self._observation_request_tokens:
+            request_token = self._observation_request_tokens.popleft()
+            self._receive_observation_response(request_token, self.polling_timeout_ms)
+        self.latest_host_timing = {}
+        self._fill_observation_request_window(include_cameras=include_cameras)
+
     def _poll_and_get_latest_message(self, *, include_cameras: bool = True) -> list[bytes] | None:
         """Consume the oldest response and replenish the bounded request window."""
 

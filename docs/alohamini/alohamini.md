@@ -159,6 +159,10 @@ clients keep receiving the same state-plus-image multipart response.
 > Replace `<Pi_IP>` with your Raspberry Pi's IP address.
 > `record_bi.py` prints the local dataset path and uploads to Hugging Face Hub by default. Add `--dataset.push_to_hub=false` to keep the dataset local only.
 > Add `--dataset.root /path/to/dataset` when you want to store or resume from a specific local directory.
+> Recording runs control at 50 Hz but writes only complete fresh-camera samples
+> at `--dataset.fps`. It may run slightly past the countdown to reach the exact
+> requested frame count; a stalled camera or excessive timestamp skew stops the
+> episode instead of silently writing repeated or temporally invalid frames.
 
 ### AlohaMini 1 — SO-ARM leader (5-DoF)
 
