@@ -211,7 +211,8 @@ python examples/alohamini/teleoperate_bi.py \
   --robot.robot_model alohamini1 \
   --teleop.id so101_leader_bi \
   --teleop.arm_profile so-arm-5dof \
-  --fps 30
+  --fps 50 \
+  --camera-fps 30
 ```
 
 AlohaMini 2 / 2 Pro with AM-ARM leader:
@@ -222,7 +223,8 @@ python examples/alohamini/teleoperate_bi.py \
   --robot.robot_model alohamini2 \
   --teleop.id am_leader_bi \
   --teleop.arm_profile am-leader-6dof \
-  --fps 30
+  --fps 50 \
+  --camera-fps 30
 ```
 
 Lower FPS for network or CPU debugging:
@@ -233,7 +235,8 @@ python examples/alohamini/teleoperate_bi.py \
   --robot.robot_model alohamini2 \
   --teleop.id am_leader_bi \
   --teleop.arm_profile am-leader-6dof \
-  --fps 10
+  --fps 10 \
+  --camera-fps 10
 ```
 
 ## Recording
