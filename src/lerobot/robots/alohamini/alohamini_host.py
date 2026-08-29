@@ -23,6 +23,7 @@ import cv2
 import zmq
 
 from .alohamini import AlohaMini
+from .camera_stream import CameraStreamPublisher
 from .config_alohamini import AlohaMiniConfig, AlohaMiniHostConfig
 
 
@@ -61,8 +62,12 @@ def _jsonable(value):
     return value
 
 
-def build_observation_multipart(observation: dict, camera_keys) -> list[bytes]:
-    """Encode state as JSON and camera images as binary JPEG multipart frames."""
+def build_observation_multipart(
+    observation: dict, camera_keys, encoded_camera_keys=None
+) -> list[bytes]:
+    """Encode state as JSON and selected camera images as binary JPEG frames."""
+    camera_keys = tuple(camera_keys)
+    encoded_camera_keys = camera_keys if encoded_camera_keys is None else tuple(encoded_camera_keys)
     state_observation = {
         key: _jsonable(value) for key, value in observation.items() if key not in camera_keys
     }
@@ -70,7 +75,7 @@ def build_observation_multipart(observation: dict, camera_keys) -> list[bytes]:
 
     parts = [json.dumps(state_observation).encode("utf-8")]
     image_names = []
-    for cam_key in camera_keys:
+    for cam_key in encoded_camera_keys:
         frame = observation.get(cam_key)
         if frame is None:
             continue
@@ -84,6 +89,44 @@ def build_observation_multipart(observation: dict, camera_keys) -> list[bytes]:
     state_observation["_images"] = image_names
     parts[0] = json.dumps(state_observation).encode("utf-8")
     return parts
+
+
+def build_robot_metadata(robot: AlohaMini) -> dict:
+    """Describe connected hardware so ROS can validate model and joint units."""
+    motors = {}
+    for bus in (robot.left_bus, robot.right_bus):
+        if bus is None:
+            continue
+        for name, motor in bus.motors.items():
+            calibration = bus.calibration.get(name)
+            if calibration is None:
+                continue
+            motors[name] = {
+                "id": int(motor.id),
+                "model": motor.model,
+                "normalization": motor.norm_mode.value,
+                "drive_mode": int(calibration.drive_mode),
+                "range_min": int(calibration.range_min),
+                "range_max": int(calibration.range_max),
+            }
+
+    metadata = {
+        "schema_version": 1,
+        "robot_model": robot.config.robot_model,
+        "motors": motors,
+    }
+    if getattr(robot, "lift", None) is not None:
+        metadata["lift_axis"] = {
+            "soft_min_mm": float(robot.lift.cfg.soft_min_mm),
+            "soft_max_mm": float(robot.lift.cfg.soft_max_mm),
+            "descent_floor_mm": float(robot.lift.cfg.descent_floor_mm),
+        }
+    return metadata
+
+
+def observation_request_includes_cameras(request_token: bytes | None) -> bool:
+    """Keep legacy/plain requests full while allowing ROS state-only requests."""
+    return request_token is not None and not request_token.endswith(b":state")
 
 
 def parse_bool(value: str | bool) -> bool:
@@ -133,6 +176,17 @@ def main():
             "(default: false)."
         ),
     )
+    parser.add_argument(
+        "--camera-stream",
+        action="store_true",
+        help="Publish the optional ROS camera stream on port 5557.",
+    )
+    parser.add_argument(
+        "--camera-stream-port",
+        type=int,
+        default=None,
+        help="Override the dedicated ROS camera PUB port.",
+    )
     args = parser.parse_args()
 
     logging.info("Configuring AlohaMini")
@@ -147,10 +201,35 @@ def main():
 
     logging.info("Connecting AlohaMini")
     robot.connect()
+    robot_metadata = build_robot_metadata(robot)
 
     logging.info("Starting HostAgent")
     host_config = AlohaMiniHostConfig()
+    host_config.camera_stream_enabled = args.camera_stream
+    if args.camera_stream_port is not None:
+        host_config.port_zmq_camera_stream = args.camera_stream_port
     host = AlohaMiniHost(host_config)
+    camera_stream = (
+        CameraStreamPublisher(
+            robot.cameras,
+            port=host_config.port_zmq_camera_stream,
+            jpeg_quality=host_config.camera_stream_jpeg_quality,
+            max_age_ms=host_config.camera_stream_max_age_ms,
+        )
+        if host_config.camera_stream_enabled and robot.cameras
+        else None
+    )
+    if camera_stream is not None:
+        try:
+            camera_stream.start()
+        except Exception:
+            host.disconnect()
+            robot.disconnect()
+            raise
+        logging.info(
+            "Camera stream publishing on tcp://*:%d",
+            host_config.port_zmq_camera_stream,
+        )
 
     last_cmd_time = time.time()
     watchdog_active = False
@@ -168,6 +247,20 @@ def main():
 
         while duration < host.connection_time_s:
             loop_start_t = time.perf_counter()
+
+            # A ``:state`` request deliberately bypasses camera acquisition. Plain
+            # legacy request tokens still receive the original full observation.
+            request_identity = None
+            request_token = None
+            try:
+                request_parts = host.zmq_observation_socket.recv_multipart(flags=zmq.NOBLOCK)
+                request_identity = request_parts[0]
+                request_token = request_parts[-1]
+            except zmq.Again:
+                pass
+            request_poll_done_t = time.perf_counter()
+            include_cameras = observation_request_includes_cameras(request_token)
+
             command_received = False
             try:
                 msg = host.zmq_cmd_socket.recv_string(zmq.NOBLOCK)
@@ -192,26 +285,24 @@ def main():
                 watchdog_active = True
                 robot.stop_motion()
 
-            
-            last_observation = robot.get_observation()
+            # Keep the original Host ordering: apply the newest command before
+            # sampling the observation returned in this cycle.
+            last_observation = robot.get_observation(include_cameras=include_cameras)
             observation_done_t = time.perf_counter()
 
-            # Consume at most one request credit per Host loop. Draining all pending
-            # requests here would collapse the client's sliding window back into
-            # stop-and-wait behavior because the discarded tokens never receive replies.
-            request_identity = None
-            request_token = None
-            try:
-                request_parts = host.zmq_observation_socket.recv_multipart(flags=zmq.NOBLOCK)
-                request_identity = request_parts[0]
-                request_token = request_parts[-1]
-            except zmq.Again:
-                pass
-            request_poll_done_t = time.perf_counter()
-
-            encode_done_t = request_poll_done_t
+            encode_done_t = observation_done_t
             if request_identity is not None and request_token is not None:
-                observation_parts = build_observation_multipart(last_observation, robot.cameras.keys())
+                camera_keys = tuple(robot.cameras.keys())
+                encoded_camera_keys = () if request_token.endswith(b":state") else camera_keys
+                response_observation = {
+                    **last_observation,
+                    "_robot_metadata": robot_metadata,
+                }
+                observation_parts = build_observation_multipart(
+                    response_observation,
+                    camera_keys,
+                    encoded_camera_keys,
+                )
                 encode_done_t = time.perf_counter()
                 try:
                     host.zmq_observation_socket.send_multipart(
@@ -228,10 +319,10 @@ def main():
             loop_done_t = time.perf_counter()
 
             loop_timings_ms = {
-                "command": (command_done_t - loop_start_t) * 1e3,
+                "command": (command_done_t - request_poll_done_t) * 1e3,
                 "robot_observation": (observation_done_t - command_done_t) * 1e3,
-                "request_poll": (request_poll_done_t - observation_done_t) * 1e3,
-                "jpeg_encode": (encode_done_t - request_poll_done_t) * 1e3,
+                "request_poll": (request_poll_done_t - loop_start_t) * 1e3,
+                "jpeg_encode": (encode_done_t - observation_done_t) * 1e3,
                 "response_send": (response_send_done_t - encode_done_t) * 1e3,
                 "sleep": (loop_done_t - response_send_done_t) * 1e3,
                 "loop": (loop_done_t - loop_start_t) * 1e3,
@@ -265,6 +356,15 @@ def main():
                     f"sleep={averages['sleep']:.1f} loop={averages['loop']:.1f}",
                     flush=True,
                 )
+                if camera_stream is not None:
+                    camera_stats = camera_stream.stats()
+                    print(
+                        f"[HOST CAMERA STREAM] published={camera_stats['published']:.0f} "
+                        f"dropped={camera_stats['dropped']:.0f} "
+                        f"errors={camera_stats['errors']:.0f} "
+                        f"encode_avg={camera_stats['average_encode_ms']:.1f}ms",
+                        flush=True,
+                    )
                 if timing_command_count:
                     action_averages = {
                         name: total_ms / timing_command_count
@@ -298,6 +398,8 @@ def main():
         print("Keyboard interrupt received. Exiting...")
     finally:
         print("Shutting down AlohaMini Host.")
+        if camera_stream is not None:
+            camera_stream.stop()
         robot.disconnect()
         host.disconnect()
 

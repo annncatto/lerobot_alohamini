@@ -615,7 +615,7 @@ class AlohaMini(Robot):
             return 0.0
         
     @check_if_not_connected
-    def get_observation(self) -> RobotObservation:
+    def get_observation(self, *, include_cameras: bool = True) -> RobotObservation:
         # Read actuators position for arm and vel for base
         observation_start_t = time.perf_counter()
         # arm_pos = self.left_bus.sync_read("Present_Position", self.arm_motors)
@@ -660,15 +660,40 @@ class AlohaMini(Robot):
         self.read_and_check_currents(limit_ma=2000, print_currents=True)
         currents_done_t = time.perf_counter()
 
-        # Capture images from cameras
+        # Preserve the original fresh-camera behavior for native LeRobot clients.
+        # ROS state-only requests skip this block so a 30 Hz Host never waits for
+        # a camera before publishing joint feedback.
         camera_timings_ms = {}
-        for cam_key, cam in self.cameras.items():
-            camera_start_t = time.perf_counter()
-            obs_dict[cam_key] = cam.async_read()
-            camera_done_t = time.perf_counter()
-            dt_ms = (camera_done_t - camera_start_t) * 1e3
-            camera_timings_ms[f"camera_{cam_key}"] = dt_ms
-            logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
+        camera_capture_monotonic_s = {}
+        if include_cameras:
+            for cam_key, cam in self.cameras.items():
+                camera_start_t = time.perf_counter()
+                obs_dict[cam_key] = cam.async_read()
+                capture_timestamp = getattr(cam, "latest_timestamp", None)
+                if capture_timestamp is not None:
+                    camera_capture_monotonic_s[cam_key] = float(capture_timestamp)
+                camera_done_t = time.perf_counter()
+                dt_ms = (camera_done_t - camera_start_t) * 1e3
+                camera_timings_ms[f"camera_{cam_key}"] = dt_ms
+                logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
+
+        clock_reference_monotonic_s = time.perf_counter()
+        clock_reference_unix_ns = time.time_ns()
+        state_sample_midpoint_monotonic_s = (observation_start_t + lift_done_t) / 2.0
+        obs_dict["_host_timing"] = {
+            "state_sample_started_monotonic_s": observation_start_t,
+            "state_sample_finished_monotonic_s": lift_done_t,
+            "state_sample_unix_ns": clock_reference_unix_ns
+            - round(
+                (clock_reference_monotonic_s - state_sample_midpoint_monotonic_s)
+                * 1e9
+            ),
+            "host_clock_reference": {
+                "monotonic_s": clock_reference_monotonic_s,
+                "unix_ns": clock_reference_unix_ns,
+            },
+            "camera_capture_monotonic_s": camera_capture_monotonic_s,
+        }
 
         observation_done_t = time.perf_counter()
         self.logs["observation_timing_ms"] = {

@@ -182,6 +182,22 @@ Base and lift only:
 python -m lerobot.robots.alohamini.alohamini_host --robot_model alohamini2 --no_follower
 ```
 
+ROS-compatible camera publishing is opt-in and does not change the default
+camera set or 30 Hz Host rate:
+
+```bash
+python -m lerobot.robots.alohamini.alohamini_host \
+  --robot_model alohamini2pro \
+  --camera-stream
+```
+
+The Host uses TCP 5555 for commands, 5556 for observations and metadata, and
+5557 for the optional camera-only stream. Plain 5556 requests retain the legacy
+state-plus-image response; request tokens ending in `:state` return state only.
+This protocol remains functional with a 50 Hz ROS bridge, although actual motor
+updates still follow the Host's 30 Hz loop. Use the separate 50 Hz Host change
+when matching 50 Hz hardware execution is required.
+
 ## Teleoperation
 
 Run these on the PC / DGX client after the host is running.

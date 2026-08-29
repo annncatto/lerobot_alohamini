@@ -75,7 +75,14 @@ class AlohaMiniHostConfig:
     # Network Configuration
     port_zmq_cmd: int = 5555
     port_zmq_observations: int = 5556
+    port_zmq_camera_stream: int = 5557
     observation_request_window: int = 3
+
+    # The dedicated ROS camera stream is opt-in so the original AlohaMini Host
+    # keeps its ports, CPU use, and two-camera behavior unless explicitly enabled.
+    camera_stream_enabled: bool = False
+    camera_stream_jpeg_quality: int = 70
+    camera_stream_max_age_ms: int = 500
 
     # Duration of the application
     connection_time_s: int = 6000
